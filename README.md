@@ -1,4 +1,4 @@
-# ci18n — Single-Header i18n Library for C
+# ci18n [![CI](https://github.com/ilyabrin/ci18n/actions/workflows/ci.yml/badge.svg)](https://github.com/ilyabrin/ci18n/actions)
 
 Лёгкая библиотека интернационализации (i18n) для проектов на чистом C.
 
