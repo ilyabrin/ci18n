@@ -1,0 +1,11 @@
+# English translations
+# Format: key=value
+
+greeting=Hello!
+farewell=Goodbye!
+welcome=Welcome to our application
+error=An error occurred
+success=Operation completed successfully
+menu_file=File
+menu_edit=Edit
+menu_help=Help

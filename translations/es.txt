@@ -1,0 +1,11 @@
+# Traducciones al español
+# Formato: clave=valor
+
+greeting=¡Hola!
+farewell=¡Adiós!
+welcome=Bienvenido a nuestra aplicación
+error=Ha ocurrido un error
+success=Operación completada con éxito
+menu_file=Archivo
+menu_edit=Editar
+menu_help=Ayuda
