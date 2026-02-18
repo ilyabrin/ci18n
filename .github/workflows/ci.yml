@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        compiler: [gcc, clang]
+        exclude:
+          # clang is not default on windows
+          - os: windows-latest
+            compiler: clang
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc clang make
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm
+
+      - name: Build with GCC (Unix)
+        if: runner.os != 'Windows' && matrix.compiler == 'gcc'
+        run: make CC=gcc
+
+      - name: Build with Clang (Unix)
+        if: runner.os != 'Windows' && matrix.compiler == 'clang'
+        run: make CC=clang
+
+      - name: Build with MinGW (Windows)
+        if: runner.os == 'Windows'
+        run: mingw32-make
+
+      - name: Run tests (Unix)
+        if: runner.os != 'Windows'
+        run: make test
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: mingw32-make test
+
+      - name: Run example (Unix)
+        if: runner.os != 'Windows'
+        run: ./example
+
+      - name: Run example (Windows)
+        if: runner.os == 'Windows'
+        run: ./example.exe
+
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: cppcheck --enable=all --std=c99 --error-exitcode=1 include/ examples/ tests/
