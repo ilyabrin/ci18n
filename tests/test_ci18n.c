@@ -1,5 +1,11 @@
 /*
- * Unit tests for ci18n library
+ * Unit tests for ci18n.
+ *
+ *   make test
+ *
+ * Exits non-zero if any test fails.
+ *
+ * SPDX-License-Identifier: MIT
  */
 
 #define CI18N_IMPLEMENTATION

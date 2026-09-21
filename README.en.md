@@ -7,13 +7,13 @@ Lightweight internationalization (i18n) library for pure C projects.
 ## Features
 
 - ✅ Single header file
-- ✅ Pure C (C89/C99/C11)
+- ✅ Pure C, C99 and newer
 - ✅ No external dependencies
 - ✅ Multiple language support
 - ✅ Load from files and buffers
 - ✅ Fallback language
 - ✅ Thread-safe mode (optional)
-- ✅ UTF-8 compatible
+- ✅ UTF-8 compatible, skips a BOM in translation files
 
 ## Quick Start
 
@@ -76,6 +76,29 @@ Define macros before including the header to configure:
 #define CI18N_MAX_KEYS_PER_LANGUAGE 1024
 #define CI18N_THREAD_SAFE  /* for thread safety */
 #include "ci18n.h"
+```
+
+### Linkage
+
+`CI18N_DEF` decorates every public function. Override it to change how the
+library is linked:
+
+```c
+#define CI18N_DEF static                  /* keep the API private to one file */
+#define CI18N_DEF __declspec(dllexport)   /* export from a Windows DLL */
+#define CI18N_DEF __declspec(dllimport)   /* consume that DLL */
+```
+
+With `static`, expect `-Wunused-function` for any API you do not call.
+
+### Version check
+
+```c
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(1, 1, 0)
+#error "ci18n 1.1.0 or newer is required"
+#endif
+
+printf("ci18n %s\n", CI18N_VERSION_STRING);
 ```
 
 ## API

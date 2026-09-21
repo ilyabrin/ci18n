@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main, master]
 
+# Warnings are errors in CI only. The Makefile stays warning-tolerant so a new
+# compiler version cannot break a downstream build.
+env:
+  EXTRA_CFLAGS: -Werror
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -30,25 +35,14 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install llvm
 
-      - name: Build with GCC (Unix)
-        if: runner.os != 'Windows' && matrix.compiler == 'gcc'
-        run: make CC=gcc
+      # `make` builds the example, then builds and runs the tests.
+      - name: Build and test (Unix)
+        if: runner.os != 'Windows'
+        run: make CC=${{ matrix.compiler }}
 
-      - name: Build with Clang (Unix)
-        if: runner.os != 'Windows' && matrix.compiler == 'clang'
-        run: make CC=clang
-
-      - name: Build with MinGW (Windows)
+      - name: Build and test (Windows)
         if: runner.os == 'Windows'
         run: mingw32-make
-
-      - name: Run tests (Unix)
-        if: runner.os != 'Windows'
-        run: make test
-
-      - name: Run tests (Windows)
-        if: runner.os == 'Windows'
-        run: mingw32-make test
 
       - name: Run example (Unix)
         if: runner.os != 'Windows'

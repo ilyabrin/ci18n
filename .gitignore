@@ -7,13 +7,20 @@
 *.dylib
 *.a
 *.lib
+build/
 
 # Executables
 example
 example.exe
+test_ci18n
+test_ci18n.exe
 
 # Make
 Makefile.bak
+
+# Tooling
+compile_commands.json
+.cache/
 
 # IDE
 .vscode/
@@ -29,3 +36,4 @@ Thumbs.db
 # Debug
 *.pdb
 *.ilk
+*.dSYM/

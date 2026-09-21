@@ -5,9 +5,9 @@
  * Features:
  *   - Simple translation key-value storage
  *   - Multiple language support
- *   - UTF-8 string handling
- *   - Thread-safe option
- *   - No external dependencies (pure C)
+ *   - UTF-8 string handling, BOM tolerant
+ *   - Thread-local context option
+ *   - No external dependencies, C99 and newer
  *
  * USAGE:
  *   #define CI18N_IMPLEMENTATION before including this header in ONE source file
@@ -30,9 +30,9 @@
  *   # This is a comment
  *   welcome_message=Welcome to our application!
  *
- * Copyright (c) 2026 https://github.com/ilyabrin
+ * Copyright (c) 2026 Ilya Brin
  *
- * LICENSE: MIT
+ * SPDX-License-Identifier: MIT
  */
 
 #ifndef CI18N_H
@@ -40,6 +40,41 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+
+/* ============================================================================
+ * Version
+ * ============================================================================ */
+
+#define CI18N_VERSION_MAJOR 1
+#define CI18N_VERSION_MINOR 0
+#define CI18N_VERSION_PATCH 0
+#define CI18N_VERSION_STRING "1.0.0"
+
+/* Compare against this to require a minimum version at compile time:
+ *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(1, 1, 0)
+ *   #error "ci18n 1.1.0 or newer is required"
+ *   #endif
+ */
+#define CI18N_VERSION_NUMBER(major, minor, patch) ((major) * 10000 + (minor) * 100 + (patch))
+#define CI18N_VERSION CI18N_VERSION_NUMBER(CI18N_VERSION_MAJOR, CI18N_VERSION_MINOR, CI18N_VERSION_PATCH)
+
+/* ============================================================================
+ * Linkage
+ * ============================================================================ */
+
+/* Decoration applied to every public function. Override it before including
+ * this header to change how the library is linked:
+ *
+ *   #define CI18N_DEF static          keep the API private to one file
+ *   #define CI18N_DEF __declspec(dllexport)   export from a Windows DLL
+ *   #define CI18N_DEF __declspec(dllimport)   consume that DLL
+ *
+ * With `static`, expect -Wunused-function for any API you do not call. That is
+ * normal for a private build; silence it per translation unit if it bothers you.
+ */
+#ifndef CI18N_DEF
+#define CI18N_DEF extern
+#endif
 
 #ifdef __cplusplus
 extern "C"
@@ -102,96 +137,96 @@ extern "C"
      * ============================================================================ */
 
     /* Initialize the i18n system. Must be called before any other function. */
-    bool ci18n_init(void);
+    CI18N_DEF bool ci18n_init(void);
 
     /* Shutdown and free all resources. */
-    void ci18n_free(void);
+    CI18N_DEF void ci18n_free(void);
 
     /*
      * Load translations from a file.
      * File format: key=value (one per line), # for comments
      * Returns: true on success, false on failure
      */
-    bool ci18n_load_language(const char *language_code, const char *filepath);
+    CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepath);
 
     /*
      * Load translations from a memory buffer.
      * Buffer should contain newline-separated key=value pairs.
      * Returns: true on success, false on failure
      */
-    bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length);
+    CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length);
 
     /*
      * Set the current active language.
      * Returns: true if language exists, false otherwise
      */
-    bool ci18n_set_current(const char *language_code);
+    CI18N_DEF bool ci18n_set_current(const char *language_code);
 
     /*
      * Set the fallback language (used when key not found in current language).
      * Returns: true if language exists, false otherwise
      */
-    bool ci18n_set_fallback(const char *language_code);
+    CI18N_DEF bool ci18n_set_fallback(const char *language_code);
 
     /*
      * Get translation for a key in current language.
      * Returns: translation string or NULL if not found
      */
-    const char *ci18n_get(const char *key);
+    CI18N_DEF const char *ci18n_get(const char *key);
 
     /*
      * Get translation with fallback to key itself if not found.
      * Returns: translation string or the key if not found
      */
-    const char *ci18n_get_or_key(const char *key);
+    CI18N_DEF const char *ci18n_get_or_key(const char *key);
 
     /*
      * Check if a key exists in current language.
      * Returns: true if exists, false otherwise
      */
-    bool ci18n_has(const char *key);
+    CI18N_DEF bool ci18n_has(const char *key);
 
     /*
      * Get the current language code.
      * Returns: language code string or empty string if not set
      */
-    const char *ci18n_get_current(void);
+    CI18N_DEF const char *ci18n_get_current(void);
 
     /*
      * Get list of available language codes.
      * Returns: pointer to array of language codes, sets count
      */
-    const char **ci18n_get_languages(size_t *count);
+    CI18N_DEF const char **ci18n_get_languages(size_t *count);
 
     /*
      * Add a translation entry programmatically.
      * Returns: true on success, false on failure
      */
-    bool ci18n_set(const char *language_code, const char *key, const char *value);
+    CI18N_DEF bool ci18n_set(const char *language_code, const char *key, const char *value);
 
     /*
      * Remove a translation entry.
      * Returns: true if removed, false if not found
      */
-    bool ci18n_remove(const char *language_code, const char *key);
+    CI18N_DEF bool ci18n_remove(const char *language_code, const char *key);
 
     /*
      * Clear all translations for a language.
      * Returns: true if cleared, false if language not found
      */
-    bool ci18n_clear(const char *language_code);
+    CI18N_DEF bool ci18n_clear(const char *language_code);
 
     /*
      * Get translation count for a language.
      * Returns: number of entries, or 0 if language not found
      */
-    size_t ci18n_count(const char *language_code);
+    CI18N_DEF size_t ci18n_count(const char *language_code);
 
     /*
      * Check if the system is initialized.
      * Returns: true if initialized, false otherwise
      */
-    bool ci18n_is_initialized(void);
+    CI18N_DEF bool ci18n_is_initialized(void);
 
     /* ============================================================================
      * Optional: Thread-safe version (define CI18N_THREAD_SAFE before including)
@@ -199,7 +234,7 @@ extern "C"
 
 #ifdef CI18N_THREAD_SAFE
     /* Get thread-local context for manual control */
-    ci18n_context_t *ci18n_get_context(void);
+    CI18N_DEF ci18n_context_t *ci18n_get_context(void);
 #endif
 
 #ifdef __cplusplus
@@ -217,7 +252,6 @@ extern "C"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 /* Internal helper macros */
 #define CI18N_MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -236,6 +270,37 @@ static CI18N_THREAD_LOCAL ci18n_context_t ci18n_ctx;
 static ci18n_context_t ci18n_ctx;
 #endif
 
+/*
+ * Whitespace test that does not depend on the active locale.
+ *
+ * isspace() classifies bytes above 127 as space in some locales, which would
+ * eat the tail of a UTF-8 sequence while trimming a translated value.
+ */
+static int ci18n_is_space(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+}
+
+/*
+ * Copy at most cap-1 bytes and terminate.
+ *
+ * Unlike strncpy() this does not pad the destination with zeros, which matters
+ * because a value field is 4 KB wide and would otherwise be rewritten in full
+ * on every single assignment.
+ */
+static void ci18n_copy(char *dst, size_t cap, const char *src)
+{
+    size_t len = strlen(src);
+
+    if (len > cap - 1)
+    {
+        len = cap - 1;
+    }
+
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
 /* Trim leading and trailing whitespace in-place */
 static void ci18n_trim(char *str)
 {
@@ -244,7 +309,7 @@ static void ci18n_trim(char *str)
     size_t len;
 
     /* Trim leading space */
-    while (isspace((unsigned char)*start))
+    while (ci18n_is_space(*start))
         start++;
 
     /* All spaces? */
@@ -256,7 +321,7 @@ static void ci18n_trim(char *str)
 
     /* Trim trailing space */
     end = start + strlen(start) - 1;
-    while (end > start && isspace((unsigned char)*end))
+    while (end > start && ci18n_is_space(*end))
         end--;
 
     /* Write new null terminator */
@@ -309,15 +374,24 @@ static ci18n_language_t *ci18n_get_or_create_language(const char *code)
         return NULL;
     }
 
-    lang = &ci18n_ctx.languages[ci18n_ctx.language_count++];
+    lang = &ci18n_ctx.languages[ci18n_ctx.language_count];
     memset(lang, 0, sizeof(ci18n_language_t));
-    strncpy(lang->code, code, sizeof(lang->code) - 1);
-    lang->code[sizeof(lang->code) - 1] = '\0';
+    ci18n_copy(lang->code, sizeof(lang->code), code);
 
-    /* Allocate initial entries array */
+    /* Allocate the initial entries array.
+     *
+     * Capacity is only published once the allocation succeeds: otherwise
+     * ci18n_ensure_capacity() would see room in a NULL array and let the
+     * caller write through a null pointer. */
+    lang->entries = (ci18n_entry_t *)malloc(sizeof(ci18n_entry_t) * 64);
+    if (!lang->entries)
+    {
+        return NULL;
+    }
+
     lang->capacity = 64;
-    lang->entries = (ci18n_entry_t *)malloc(sizeof(ci18n_entry_t) * lang->capacity);
     lang->count = 0;
+    ci18n_ctx.language_count++;
 
     return lang;
 }
@@ -365,8 +439,18 @@ static bool ci18n_parse_line(ci18n_language_t *lang, const char *line)
     int existing;
     size_t key_len;
 
+    /* Skip a UTF-8 BOM. Editors on Windows often prepend one, and without this
+     * the first key of the file would silently become "\xEF\xBB\xBFkey" and be
+     * unreachable through ci18n_get(). */
+    if ((unsigned char)line[0] == 0xEF &&
+        (unsigned char)line[1] == 0xBB &&
+        (unsigned char)line[2] == 0xBF)
+    {
+        line += 3;
+    }
+
     /* Skip empty lines and comments */
-    while (*line && isspace((unsigned char)*line))
+    while (*line && ci18n_is_space(*line))
         line++;
     if (*line == '\0' || *line == '#' || *line == ';')
     {
@@ -392,8 +476,7 @@ static bool ci18n_parse_line(ci18n_language_t *lang, const char *line)
     }
 
     /* Extract value */
-    strncpy(value, eq + 1, CI18N_MAX_VALUE_LENGTH - 1);
-    value[CI18N_MAX_VALUE_LENGTH - 1] = '\0';
+    ci18n_copy(value, CI18N_MAX_VALUE_LENGTH, eq + 1);
     ci18n_trim(value);
 
     /* Check if key already exists */
@@ -401,7 +484,7 @@ static bool ci18n_parse_line(ci18n_language_t *lang, const char *line)
     if (existing >= 0)
     {
         /* Update existing entry */
-        strncpy(lang->entries[existing].value, value, CI18N_MAX_VALUE_LENGTH - 1);
+        ci18n_copy(lang->entries[existing].value, CI18N_MAX_VALUE_LENGTH, value);
         return true;
     }
 
@@ -412,10 +495,8 @@ static bool ci18n_parse_line(ci18n_language_t *lang, const char *line)
     }
 
     entry = &lang->entries[lang->count++];
-    strncpy(entry->key, key, CI18N_MAX_KEY_LENGTH - 1);
-    entry->key[CI18N_MAX_KEY_LENGTH - 1] = '\0';
-    strncpy(entry->value, value, CI18N_MAX_VALUE_LENGTH - 1);
-    entry->value[CI18N_MAX_VALUE_LENGTH - 1] = '\0';
+    ci18n_copy(entry->key, CI18N_MAX_KEY_LENGTH, key);
+    ci18n_copy(entry->value, CI18N_MAX_VALUE_LENGTH, value);
 
     return true;
 }
@@ -424,7 +505,7 @@ static bool ci18n_parse_line(ci18n_language_t *lang, const char *line)
  * Public API Implementation
  * ============================================================================ */
 
-bool ci18n_init(void)
+CI18N_DEF bool ci18n_init(void)
 {
     if (ci18n_ctx.initialized)
     {
@@ -436,7 +517,7 @@ bool ci18n_init(void)
     return true;
 }
 
-void ci18n_free(void)
+CI18N_DEF void ci18n_free(void)
 {
     size_t i;
 
@@ -457,7 +538,7 @@ void ci18n_free(void)
     memset(&ci18n_ctx, 0, sizeof(ci18n_context_t));
 }
 
-bool ci18n_load_language(const char *language_code, const char *filepath)
+CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepath)
 {
     FILE *file;
     char line[CI18N_MAX_LINE_LENGTH];
@@ -483,16 +564,14 @@ bool ci18n_load_language(const char *language_code, const char *filepath)
 
     while (fgets(line, sizeof(line), file))
     {
-        /* Remove newline */
+        /* Strip the line terminator. One loop covers LF, CRLF and a lone CR,
+         * so a file authored on any platform parses the same way. */
         size_t len = strlen(line);
-        if (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
         {
-            line[len - 1] = '\0';
-            if (len > 1 && line[len - 2] == '\r')
-            {
-                line[len - 2] = '\0';
-            }
+            line[--len] = '\0';
         }
+
         ci18n_parse_line(lang, line);
     }
 
@@ -500,7 +579,7 @@ bool ci18n_load_language(const char *language_code, const char *filepath)
     return true;
 }
 
-bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length)
+CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length)
 {
     ci18n_language_t *lang;
     char line[CI18N_MAX_LINE_LENGTH];
@@ -553,7 +632,7 @@ bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_
     return true;
 }
 
-bool ci18n_set_current(const char *language_code)
+CI18N_DEF bool ci18n_set_current(const char *language_code)
 {
     if (!ci18n_ctx.initialized || !language_code)
     {
@@ -565,12 +644,11 @@ bool ci18n_set_current(const char *language_code)
         return false;
     }
 
-    strncpy(ci18n_ctx.current_language, language_code, sizeof(ci18n_ctx.current_language) - 1);
-    ci18n_ctx.current_language[sizeof(ci18n_ctx.current_language) - 1] = '\0';
+    ci18n_copy(ci18n_ctx.current_language, sizeof(ci18n_ctx.current_language), language_code);
     return true;
 }
 
-bool ci18n_set_fallback(const char *language_code)
+CI18N_DEF bool ci18n_set_fallback(const char *language_code)
 {
     if (!ci18n_ctx.initialized || !language_code)
     {
@@ -582,12 +660,11 @@ bool ci18n_set_fallback(const char *language_code)
         return false;
     }
 
-    strncpy(ci18n_ctx.fallback_language, language_code, sizeof(ci18n_ctx.fallback_language) - 1);
-    ci18n_ctx.fallback_language[sizeof(ci18n_ctx.fallback_language) - 1] = '\0';
+    ci18n_copy(ci18n_ctx.fallback_language, sizeof(ci18n_ctx.fallback_language), language_code);
     return true;
 }
 
-const char *ci18n_get(const char *key)
+CI18N_DEF const char *ci18n_get(const char *key)
 {
     int lang_idx;
     ci18n_language_t *lang;
@@ -631,18 +708,18 @@ const char *ci18n_get(const char *key)
     return NULL;
 }
 
-const char *ci18n_get_or_key(const char *key)
+CI18N_DEF const char *ci18n_get_or_key(const char *key)
 {
     const char *result = ci18n_get(key);
     return result ? result : key;
 }
 
-bool ci18n_has(const char *key)
+CI18N_DEF bool ci18n_has(const char *key)
 {
     return ci18n_get(key) != NULL;
 }
 
-const char *ci18n_get_current(void)
+CI18N_DEF const char *ci18n_get_current(void)
 {
     if (!ci18n_ctx.initialized)
     {
@@ -651,7 +728,7 @@ const char *ci18n_get_current(void)
     return ci18n_ctx.current_language;
 }
 
-const char **ci18n_get_languages(size_t *count)
+CI18N_DEF const char **ci18n_get_languages(size_t *count)
 {
     static const char *codes[CI18N_MAX_LANGUAGES];
     size_t i;
@@ -671,7 +748,7 @@ const char **ci18n_get_languages(size_t *count)
     return codes;
 }
 
-bool ci18n_set(const char *language_code, const char *key, const char *value)
+CI18N_DEF bool ci18n_set(const char *language_code, const char *key, const char *value)
 {
     ci18n_language_t *lang;
     ci18n_entry_t *entry;
@@ -692,7 +769,7 @@ bool ci18n_set(const char *language_code, const char *key, const char *value)
     existing = ci18n_find_entry(lang, key);
     if (existing >= 0)
     {
-        strncpy(lang->entries[existing].value, value, CI18N_MAX_VALUE_LENGTH - 1);
+        ci18n_copy(lang->entries[existing].value, CI18N_MAX_VALUE_LENGTH, value);
         return true;
     }
 
@@ -703,15 +780,13 @@ bool ci18n_set(const char *language_code, const char *key, const char *value)
     }
 
     entry = &lang->entries[lang->count++];
-    strncpy(entry->key, key, CI18N_MAX_KEY_LENGTH - 1);
-    entry->key[CI18N_MAX_KEY_LENGTH - 1] = '\0';
-    strncpy(entry->value, value, CI18N_MAX_VALUE_LENGTH - 1);
-    entry->value[CI18N_MAX_VALUE_LENGTH - 1] = '\0';
+    ci18n_copy(entry->key, CI18N_MAX_KEY_LENGTH, key);
+    ci18n_copy(entry->value, CI18N_MAX_VALUE_LENGTH, value);
 
     return true;
 }
 
-bool ci18n_remove(const char *language_code, const char *key)
+CI18N_DEF bool ci18n_remove(const char *language_code, const char *key)
 {
     int lang_idx;
     ci18n_language_t *lang;
@@ -748,7 +823,7 @@ bool ci18n_remove(const char *language_code, const char *key)
     return true;
 }
 
-bool ci18n_clear(const char *language_code)
+CI18N_DEF bool ci18n_clear(const char *language_code)
 {
     int lang_idx;
     ci18n_language_t *lang;
@@ -780,7 +855,7 @@ bool ci18n_clear(const char *language_code)
     return true;
 }
 
-size_t ci18n_count(const char *language_code)
+CI18N_DEF size_t ci18n_count(const char *language_code)
 {
     int lang_idx;
 
@@ -798,13 +873,13 @@ size_t ci18n_count(const char *language_code)
     return ci18n_ctx.languages[lang_idx].count;
 }
 
-bool ci18n_is_initialized(void)
+CI18N_DEF bool ci18n_is_initialized(void)
 {
     return ci18n_ctx.initialized;
 }
 
 #ifdef CI18N_THREAD_SAFE
-ci18n_context_t *ci18n_get_context(void)
+CI18N_DEF ci18n_context_t *ci18n_get_context(void)
 {
     return &ci18n_ctx;
 }
