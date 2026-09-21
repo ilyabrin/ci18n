@@ -18,51 +18,63 @@ static int tests_run = 0;
 static int tests_passed = 0;
 static int tests_failed = 0;
 
+/* Set by a failing assertion, read by RUN_TEST. A test body cannot report its
+ * own result: the assertion macros return early, so only the runner knows
+ * whether the body ran to completion. */
+static int test_failed;
+
 #define TEST(name) static void name(void)
+
 #define RUN_TEST(name)                   \
     do                                   \
     {                                    \
         tests_run++;                     \
+        test_failed = 0;                 \
         printf("Running %s... ", #name); \
         name();                          \
-        tests_passed++;                  \
-        printf("PASSED\n");              \
+        if (test_failed)                 \
+        {                                \
+            tests_failed++;              \
+        }                                \
+        else                             \
+        {                                \
+            tests_passed++;              \
+            printf("PASSED\n");          \
+        }                                \
     } while (0)
 
-#define ASSERT(cond)                                    \
-    do                                                  \
-    {                                                   \
-        if (!(cond))                                    \
-        {                                               \
-            printf("FAILED\n");                         \
-            printf("  Assertion failed: %s\n", #cond);  \
-            printf("  at %s:%d\n", __FILE__, __LINE__); \
-            tests_failed++;                             \
-            return;                                     \
-        }                                               \
+/* Reports the failure and leaves the test body. Every assertion prints the
+ * trailing newline the "Running ..." line is still missing. */
+#define FAIL(...)            \
+    do                       \
+    {                        \
+        printf("FAILED\n");  \
+        printf(__VA_ARGS__); \
+        test_failed = 1;     \
+        return;              \
     } while (0)
 
-#define ASSERT_STR_EQ(a, b)                                     \
-    do                                                          \
-    {                                                           \
-        const char *_a = (a);                                   \
-        const char *_b = (b);                                   \
-        if (_a == NULL || _b == NULL)                           \
-        {                                                       \
-            printf("FAILED\n");                                 \
-            printf("  Expected: \"%s\"\n", _b ? _b : "(null)"); \
-            printf("  Got:      \"%s\"\n", _a ? _a : "(null)"); \
-            tests_failed++;                                     \
-            return;                                             \
-        }                                                       \
-        if (strcmp(_a, _b) != 0)                                \
-        {                                                       \
-            printf("FAILED\n");                                 \
-            printf("  Expected: \"%s\"\n", _b);                 \
-            printf("  Got:      \"%s\"\n", _a);                 \
-            tests_failed++;                                     \
-            return;                                             \
-        }                                                       \
+#define ASSERT(cond)                                                       \
+    do                                                                     \
+    {                                                                      \
+        if (!(cond))                                                       \
+        {                                                                  \
+            FAIL("  Assertion failed: %s\n  at %s:%d\n",                   \
+                 #cond, __FILE__, __LINE__);                               \
+        }                                                                  \
+    } while (0)
+
+#define ASSERT_STR_EQ(a, b)                                                \
+    do                                                                     \
+    {                                                                      \
+        const char *_a = (a);                                              \
+        const char *_b = (b);                                              \
+        if (_a == NULL || _b == NULL || strcmp(_a, _b) != 0)               \
+        {                                                                  \
+            FAIL("  Expected: \"%s\"\n  Got:      \"%s\"\n  at %s:%d\n",   \
+                 _b ? _b : "(null)", _a ? _a : "(null)",                   \
+                 __FILE__, __LINE__);                                      \
+        }                                                                  \
     } while (0)
 
 /* ============================================================================
