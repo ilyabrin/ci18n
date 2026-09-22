@@ -41,6 +41,11 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
   `-Wall -Wextra -Wpedantic -Werror` elsewhere, on every compiler. Staying
   warning-clean is only true for as long as something checks.
 
+  The step needs `MSYS_NO_PATHCONV=1`, because Git Bash rewrites a leading
+  slash into a Windows path and `/W4` arrives at cmake as
+  `C:/Program Files/Git/W4`. Worth recording because the failure looks
+  nothing like its cause.
+
 ## 2.6.1 - 2026-09-22
 
 ### Fixed

@@ -206,6 +206,14 @@ jobs:
       # to stay clean at the strictest level each compiler offers, and that
       # only stays true if something checks.
       - name: Build again with warnings as errors
+        # Git Bash rewrites a leading slash into a Windows path, so /W4
+        # arrives as C:/Program Files/Git/W4 and cmake tries to compile it.
+        # Both spellings are set because Git Bash and MSYS2 read different
+        # variables. Do not remove these: the MSVC leg fails without them,
+        # and the failure looks nothing like its cause.
+        env:
+          MSYS_NO_PATHCONV: 1
+          MSYS2_ARG_CONV_EXCL: "*"
         run: |
           if [ "${{ matrix.compiler }}" = "msvc" ]; then
             cmake -B build-strict -DCMAKE_C_FLAGS="/W4 /WX"
