@@ -1,0 +1,12 @@
+# ci18n has no package dependencies, being a single header with none. The
+# actions in the workflow are the only thing that can go stale.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies

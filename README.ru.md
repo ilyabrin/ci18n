@@ -261,7 +261,8 @@ gcc -Wall -Wextra -std=c99 -I./include -o example examples/example.c
 
 Баг-репорты и пулл-реквесты приветствуются. Как собрать, протестировать и
 оформить изменение, описано в [CONTRIBUTING.md](CONTRIBUTING.md), а про
-сообщения об уязвимостях в [SECURITY.md](SECURITY.md).
+сообщения об уязвимостях в [SECURITY.md](SECURITY.md). История релизов лежит
+в [CHANGELOG.md](CHANGELOG.md).
 
 Канонический README английский, [README.md](README.md). Этот перевод
 обновляется по мере сил, так что при расхождении верен английский.

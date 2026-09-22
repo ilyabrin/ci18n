@@ -259,7 +259,8 @@ Run both from the repository root so the relative paths in
 
 Bug reports and pull requests are welcome. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and submit a change,
-and [SECURITY.md](SECURITY.md) for reporting a vulnerability.
+and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Release history is
+in [CHANGELOG.md](CHANGELOG.md).
 
 This English README is the canonical one. The Russian translation is updated on
 a best-effort basis, so when the two disagree, this file wins.

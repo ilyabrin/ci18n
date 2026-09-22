@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest something the library should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The README lists what is deliberately out of scope. Plurals,
+        interpolation, environment detection and gettext import are known gaps
+        and already planned, so an issue for those is welcome mainly to say how
+        you would use them.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do that the library makes hard today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: What the API might look like
+      description: A sketch is enough. It does not have to be the final design.
+      render: c
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead right now
+      description: A workaround tells us how much the gap actually costs.
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints this has to respect
+      description: |
+        These are the properties the library is built around. Check the ones
+        your idea keeps intact, so the trade-off is explicit.
+      options:
+        - label: Stays a single header with no dependencies
+        - label: Stays C99, no compiler extensions
+        - label: Does not grow the per-entry memory footprint
+        - label: Does not change existing function signatures
