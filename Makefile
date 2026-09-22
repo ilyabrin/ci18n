@@ -24,7 +24,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads test-po fuzz fuzz-run fuzz-replay fuzz-corpus
+.PHONY: all clean example test test-threads test-shared test-po fuzz fuzz-run fuzz-replay fuzz-corpus
 
 all: example test
 
@@ -41,6 +41,16 @@ test: tests/test_ci18n.c include/ci18n.h
 test-threads: tests/test_thread_local.c include/ci18n.h
 	$(CC) $(ALL_CFLAGS) -pthread -o test_thread_local tests/test_thread_local.c
 	./test_thread_local
+
+# Shared context tests, the CI18N_THREAD_SHARED mode. Needs pthreads, and is
+# only meaningful under a thread sanitizer, which CI supplies.
+# _POSIX_C_SOURCE because glibc hides pthread_rwlock_* in the strict ANSI mode
+# that -std=c99 selects. The header says so too, rather than letting the
+# declarations arrive implicitly.
+test-shared: tests/test_thread_shared.c include/ci18n.h
+	$(CC) $(ALL_CFLAGS) -D_POSIX_C_SOURCE=200809L -pthread \
+		-o test_thread_shared tests/test_thread_shared.c
+	./test_thread_shared
 
 # Round trip through the .po converter. Needs python3, so it is not part of
 # `all`, and the converter lives outside the library on purpose.
@@ -121,4 +131,5 @@ clean:
 	$(RM) example example.exe test_ci18n test_ci18n.exe \
 		test_thread_local test_thread_local.exe \
 		fuzz_load_buffer fuzz_load_buffer.exe fuzz_replay fuzz_replay.exe \
-		test_po_roundtrip test_po_roundtrip.exe po_roundtrip.txt
+		test_po_roundtrip test_po_roundtrip.exe po_roundtrip.txt \
+		test_thread_shared test_thread_shared.exe

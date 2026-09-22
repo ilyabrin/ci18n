@@ -25,6 +25,8 @@ test_ci18n
 test_ci18n.exe
 test_thread_local
 test_thread_local.exe
+test_thread_shared
+test_thread_shared.exe
 fuzz_load_buffer
 fuzz_load_buffer.exe
 fuzz_replay

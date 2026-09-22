@@ -124,6 +124,14 @@ jobs:
           make clean
           make CC=${{ matrix.compiler }}
 
+      # The shared mode is the one a lock can get wrong, so it runs readers
+      # and a writer at the same time. Under ThreadSanitizer below this is
+      # the check that the rwlock actually covers every path.
+      - name: Shared context tests
+        run: |
+          make clean
+          make CC=${{ matrix.compiler }} test-shared
+
   # Packaging is only real if something consumes it, so this installs the
   # library and builds a consumer against the install tree, then again as a
   # subproject, which is the path FetchContent takes.
@@ -304,3 +312,10 @@ jobs:
         run: |
           make clean
           make CC=${{ matrix.compiler }} test-threads EXTRA_CFLAGS="-Werror $SAN_FLAGS"
+
+      # The point of the whole exercise: readers and a writer on one shared
+      # context, instrumented. Without this the rwlock would be a claim.
+      - name: Shared context tests
+        run: |
+          make clean
+          make CC=${{ matrix.compiler }} test-shared EXTRA_CFLAGS="-Werror $SAN_FLAGS"

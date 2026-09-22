@@ -347,20 +347,53 @@ rely on the environment variables alone.
 
 ### Threads
 
-`CI18N_THREAD_LOCAL_CONTEXT` gives every thread its own context. Read that
-literally: it is isolation, not shared thread safety. Each thread starts empty
-and calls `ci18n_init()` and the loaders itself, and a language loaded on one
-thread is invisible to the others. That suits a worker rendering in one user's
-locale.
+Three modes. Pick one before including the header; defining two is an error.
 
-What it does not give you is "load once, read from many threads". Without the
-macro the context is a single global with no locking, so a concurrent
-`ci18n_set()` or `ci18n_load_*()` against a concurrent `ci18n_get()` is a data
-race. If your threads only read, and every load finished before you spawned
-them, the plain global is already safe.
+| Mode | What you get |
+| --- | --- |
+| nothing defined | One global context, no locking |
+| `CI18N_THREAD_LOCAL_CONTEXT` | A separate context per thread |
+| `CI18N_THREAD_SHARED` | One shared context behind a reader-writer lock |
 
-`CI18N_THREAD_SAFE` is the old name for this macro. It still works and still
-means exactly the same thing, but it emits a deprecation note.
+**Default.** Safe when every load finished before the threads started and they
+only read afterwards, which covers most programs. A concurrent `ci18n_set()`
+or `ci18n_load_*()` against a concurrent `ci18n_get()` is a data race.
+
+**`CI18N_THREAD_LOCAL_CONTEXT`.** Isolation, not sharing. Each thread calls
+`ci18n_init()` and loads its own translations, and a language loaded on one
+thread is invisible to the others. Suits a worker rendering in one user's
+locale. `CI18N_THREAD_SAFE` is the old name for this one; it still works and
+emits a deprecation note.
+
+**`CI18N_THREAD_SHARED`.** One context, an rwlock around every entry point.
+Readers do not block each other, a writer excludes everyone. This is the
+"load once, read from many threads, reload occasionally" case.
+
+```c
+#define CI18N_THREAD_SHARED
+#define CI18N_IMPLEMENTATION
+#include "ci18n.h"
+```
+
+Two things to know about the shared mode.
+
+**Use `ci18n_get_copy()`, not `ci18n_get()`.** A lock cannot make a returned
+pointer safe: the moment it is released, a writer may reallocate the storage
+that pointer refers to. `ci18n_get_copy()` copies while the read lock is still
+held.
+
+```c
+char text[128];
+ci18n_get_copy("greeting", text, sizeof(text));
+```
+
+**Diagnostics are per-thread.** `ci18n_last_error()` and
+`ci18n_last_load_stats()` describe the calling thread's last call, not the
+context's. Sharing one slot would mean two threads overwriting each other.
+
+On glibc this mode needs `-D_POSIX_C_SOURCE=200809L`, or `-std=gnu99` instead
+of `-std=c99`, because strict ANSI mode hides the POSIX threading
+declarations. The header says so with an `#error` if you forget.
 
 ### Pointer lifetime
 
@@ -381,8 +414,8 @@ it if you need to hold on to it.
 ### Version check
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 4, 0)
-#error "ci18n 2.4.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 5, 0)
+#error "ci18n 2.5.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -400,6 +433,7 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_set_fallback(code)`               | Set fallback language |
 | `ci18n_get(key)`                         | Get translation       |
 | `ci18n_get_or_key(key)`                  | Translation or key    |
+| `ci18n_get_copy(key, out, cap)`          | Copy it into your buffer |
 | `ci18n_has(key)`                         | Check if key exists   |
 | `ci18n_set(lang, key, value)`            | Add translation       |
 | `ci18n_remove(lang, key)`                | Remove translation    |
@@ -437,7 +471,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.4.0)
+  GIT_TAG v2.5.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

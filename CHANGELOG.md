@@ -8,10 +8,66 @@ Because this is a single-header library, upgrading means replacing one file.
 Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 4, 0)
-#error "ci18n 2.4.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 5, 0)
+#error "ci18n 2.5.0 or newer is required"
 #endif
 ```
+
+## 2.5.0 - 2026-09-22
+
+Real thread safety: one shared context behind a reader-writer lock.
+
+### Added
+
+- `CI18N_THREAD_SHARED`, a third threading mode. There are now three, and the
+  README spells them out:
+
+  1. Default. One global context, no locking. Safe when every load finished
+     before the threads started and they only read afterwards.
+  2. `CI18N_THREAD_LOCAL_CONTEXT`. A context per thread. Isolation, not
+     sharing: each thread loads its own translations.
+  3. `CI18N_THREAD_SHARED`. One shared context behind an rwlock, which is the
+     "load once, read from many threads, reload occasionally" case. Readers do
+     not block each other; a writer excludes everyone.
+
+  Defining both macros is an error rather than a coin toss.
+
+- `ci18n_get_copy()`, which copies a translation into a buffer you own. This
+  is the safe read under `CI18N_THREAD_SHARED`, because the copy is made while
+  the read lock is still held. A returned pointer cannot be made safe by a
+  lock: the instant the lock is released, a writer may reallocate the storage
+  it points into. Useful single-threaded too, whenever a translation has to
+  outlive the next write.
+
+- In the shared mode, `ci18n_last_error()` and `ci18n_last_load_stats()` are
+  per-thread rather than shared. A diagnostic describes the call that produced
+  it, so one shared slot would mean two threads overwriting each other and
+  neither being able to trust the answer.
+
+- `make test-shared` runs four readers and a writer against one context at the
+  same time. It runs in CI both plainly and under ThreadSanitizer, which is
+  the only way an rwlock claim can be believed. Verified against a build with
+  the locks stubbed out, where ThreadSanitizer reports the race immediately.
+
+### Changed
+
+- Every public function is now a thin locking wrapper around an unlocked core.
+  Wrappers rather than locks threaded through the bodies: these functions have
+  several early returns each, and one lock and unlock pair per function cannot
+  leak the lock down a path somebody forgets. The internal composition was
+  rerouted to the cores, since neither `pthread_rwlock_t` nor `SRWLOCK` is
+  recursive and `ci18n_has()` calling the public `ci18n_get()` would have
+  deadlocked.
+- The lock lives inside the context rather than beside the global, so that
+  when the API grows an explicit handle it travels with it and each handle
+  locks itself.
+
+### Notes
+
+On glibc, `CI18N_THREAD_SHARED` needs `-D_POSIX_C_SOURCE=200809L`, or
+`-std=gnu99` in place of `-std=c99`: strict ANSI mode hides the POSIX
+threading declarations. The header says so with an `#error` rather than
+letting `pthread_rwlock_rdlock` arrive as an implicit declaration.
 
 ## 2.4.0 - 2026-09-22
 

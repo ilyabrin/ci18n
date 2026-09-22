@@ -1,0 +1,184 @@
+/*
+ * Shared context tests, for CI18N_THREAD_SHARED.
+ *
+ *   make test-shared
+ *
+ * The other threading mode gives each thread its own context, which is easy
+ * to verify: nothing is shared, so nothing can race. This one is the hard
+ * case, one context behind a reader-writer lock, and the only way to trust it
+ * is to run readers and writers at the same time under ThreadSanitizer.
+ *
+ * Two things are checked that a single-threaded test cannot reach:
+ *
+ *   - readers never observe a torn or half-written state while a writer is
+ *     loading, reloading and clearing underneath them
+ *   - ci18n_last_error() belongs to the calling thread. If it were shared,
+ *     a reader missing a key would clobber the writer's error and neither
+ *     could trust the answer
+ *
+ * Exits non-zero if anything fails.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#ifndef CI18N_THREAD_SHARED
+#define CI18N_THREAD_SHARED
+#endif
+
+#define CI18N_IMPLEMENTATION
+#include "ci18n.h"
+
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define READERS 4
+#define ITERATIONS 20000
+
+static volatile int stop_writing;
+static int failures;
+
+static void fail(const char *what)
+{
+    printf("FAILED: %s\n", what);
+    failures = 1;
+}
+
+/*
+ * Readers only read. Every value in the catalogue is one of a known set, so a
+ * reader that sees anything else has observed a state no writer ever
+ * published.
+ */
+static void *reader(void *arg)
+{
+    long id = (long)(intptr_t)arg;
+    int i;
+    int seen = 0;
+
+    for (i = 0; i < ITERATIONS; i++)
+    {
+        char buffer[64];
+        size_t len = ci18n_get_copy("greeting", buffer, sizeof(buffer));
+
+        if (len > 0)
+        {
+            if (strcmp(buffer, "first") != 0 && strcmp(buffer, "second") != 0)
+            {
+                fail("reader saw a value no writer published");
+                return NULL;
+            }
+            seen++;
+        }
+
+        /* A missing key sets this thread's error code. It must not be
+         * visible to the writer, and the writer's must not show up here. */
+        if (ci18n_get("definitely_absent") != NULL)
+        {
+            fail("an absent key was found");
+            return NULL;
+        }
+
+        if (ci18n_last_error() != CI18N_ERR_KEY_NOT_FOUND)
+        {
+            fail("another thread overwrote this thread's error code");
+            return NULL;
+        }
+
+        /* Exercise the rest of the read paths under contention. */
+        ci18n_has("greeting");
+        ci18n_count("en");
+        ci18n_get_languages(NULL, 0);
+        ci18n_plural_or_key("files", i);
+    }
+
+    printf("reader %ld finished, saw %d values\n", id, seen);
+    return NULL;
+}
+
+/* One writer, reloading and clearing while the readers run. */
+static void *writer(void *arg)
+{
+    int i;
+
+    (void)arg;
+
+    for (i = 0; i < 400 && !stop_writing; i++)
+    {
+        const char *first = "greeting=first\nfiles[one]=one file\nfiles[other]=many\n";
+        const char *second = "greeting=second\nfiles[one]=1 file\nfiles[other]=lots\n";
+
+        ci18n_load_from_buffer("en", first, strlen(first));
+        ci18n_load_from_buffer("en", second, strlen(second));
+
+        /* Clearing empties the language, so readers will see nothing for a
+         * while. That is allowed; seeing rubbish is not. */
+        if (i % 50 == 0)
+        {
+            ci18n_clear("en");
+            ci18n_load_from_buffer("en", first, strlen(first));
+            ci18n_set_current("en");
+        }
+
+        ci18n_set("en", "extra", "value");
+        ci18n_remove("en", "extra");
+    }
+
+    return NULL;
+}
+
+int main(void)
+{
+    pthread_t readers[READERS];
+    pthread_t scribe;
+    const char *initial = "greeting=first\nfiles[one]=one file\nfiles[other]=many\n";
+    long i;
+
+    printf("=== ci18n shared context tests ===\n\n");
+
+    if (!ci18n_init())
+    {
+        fail("init");
+        return 1;
+    }
+
+    ci18n_load_from_buffer("en", initial, strlen(initial));
+    ci18n_set_current("en");
+
+    if (pthread_create(&scribe, NULL, writer, NULL) != 0)
+    {
+        fail("pthread_create writer");
+        return 1;
+    }
+
+    for (i = 0; i < READERS; i++)
+    {
+        if (pthread_create(&readers[i], NULL, reader, (void *)(intptr_t)i) != 0)
+        {
+            fail("pthread_create reader");
+            return 1;
+        }
+    }
+
+    for (i = 0; i < READERS; i++)
+    {
+        pthread_join(readers[i], NULL);
+    }
+
+    stop_writing = 1;
+    pthread_join(scribe, NULL);
+
+    /* The catalogue has to be intact and usable afterwards. */
+    ci18n_load_from_buffer("en", initial, strlen(initial));
+    ci18n_set_current("en");
+
+    if (!ci18n_get("greeting"))
+    {
+        fail("the catalogue did not survive the run");
+    }
+
+    ci18n_free();
+
+    printf("\n%s\n", failures ? "=== FAILED ===" : "=== PASSED ===");
+    return failures;
+}
