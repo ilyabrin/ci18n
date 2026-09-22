@@ -4,6 +4,28 @@ Lightweight internationalization (i18n) library for pure C projects.
 
 **Other languages:** [Русский](README.ru.md)
 
+## Why this exists
+
+Four reasons, roughly in the order they mattered.
+
+I needed translations in a Telegram bot that runs on a small device. Pulling in
+gettext or an XML parser for a few dozen strings was not a trade I wanted to
+make. One header, no dependencies and a flat `key=value` file was the shape
+that fit.
+
+I wanted to get better at C. Not at reading it, at shipping it: memory that has
+to be freed, strings that carry no length, and the parts nobody warns you
+about, like what happens to your first key when someone saves the translation
+file with a BOM.
+
+I wanted to know how hard this actually is from an engineering standpoint. It
+turns out the lookup is the easy half. The hard half is deciding what to do
+when the input is wrong, which is why this library now tells you what a load
+dropped instead of quietly returning success.
+
+And if it saves somebody else the same afternoon, that is reason enough to put
+it out here.
+
 ## Features
 
 - ✅ Single header file
@@ -88,6 +110,7 @@ Define macros before including the header to configure:
 #define CI18N_MAX_VALUE_LENGTH 4096
 #define CI18N_MAX_LANGUAGES 32
 #define CI18N_MAX_KEYS_PER_LANGUAGE 1024
+#define CI18N_MAX_CODE_LENGTH 32
 #define CI18N_THREAD_LOCAL_CONTEXT  /* one context per thread */
 #include "ci18n.h"
 ```
@@ -104,6 +127,49 @@ library is linked:
 ```
 
 With `static`, expect `-Wunused-function` for any API you do not call.
+
+### Error handling
+
+Every call that can fail records why, and every call that succeeds clears it:
+
+```c
+if (!ci18n_load_language("en", path)) {
+    fprintf(stderr, "%s: %s\n", path, ci18n_error_string(ci18n_last_error()));
+}
+```
+
+A loader returns `true` whenever it could read its source, which says nothing
+about the contents. A file whose every line is malformed loads successfully
+with zero entries. Ask what actually happened:
+
+```c
+ci18n_load_language("en", path);
+
+const ci18n_load_stats_t *st = ci18n_last_load_stats();
+if (st->lines_malformed) {
+    fprintf(stderr, "%s: %u bad lines, first at line %u\n", path,
+            (unsigned)st->lines_malformed,
+            (unsigned)st->first_malformed_line);
+}
+```
+
+The stats also count keys, values and lines that were truncated to fit the
+`CI18N_MAX_*` limits. A load that dropped or cut anything leaves
+`ci18n_last_error()` at `CI18N_ERR_PARSE`, so a single check is enough if you
+do not need the detail.
+
+One note on the defaults: `CI18N_MAX_LINE_LENGTH` and
+`CI18N_MAX_VALUE_LENGTH` are both 4096, so an over-long value is cut by the
+line limit first. Its tail then arrives as another line with no separator and
+is counted as malformed. Raise `CI18N_MAX_LINE_LENGTH` above
+`CI18N_MAX_VALUE_LENGTH` if you want long values handled cleanly.
+
+### Language codes
+
+Codes must fit `CI18N_MAX_CODE_LENGTH`, 32 bytes including the terminator by
+default. A longer code is rejected with `CI18N_ERR_CODE_TOO_LONG` rather than
+truncated, because truncating used to mean the value could be written and
+never read back.
 
 ### Threads
 
@@ -166,6 +232,9 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_clear(lang)`                      | Clear language        |
 | `ci18n_count(lang)`                      | Entry count           |
 | `ci18n_get_languages(out, cap)`          | List of languages     |
+| `ci18n_last_error()`                     | Why the last call failed |
+| `ci18n_error_string(err)`                | Error code as text    |
+| `ci18n_last_load_stats()`                | What the last load did |
 
 ## Building
 

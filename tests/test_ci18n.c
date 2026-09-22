@@ -851,39 +851,344 @@ TEST(test_long_value_is_truncated)
     ci18n_free();
 }
 
-TEST(test_long_language_code_is_truncated)
+TEST(test_language_code_at_the_limit)
+{
+    char code[CI18N_MAX_CODE_LENGTH];
+
+    ci18n_init();
+
+    /* The longest code that still fits, terminator included. */
+    memset(code, 'c', sizeof(code) - 1);
+    code[sizeof(code) - 1] = '\0';
+
+    ASSERT(ci18n_set(code, "k", "v") == true);
+    ASSERT(ci18n_set_current(code) == true);
+    ASSERT_STR_EQ(ci18n_get("k"), "v");
+    ASSERT(ci18n_count(code) == 1);
+
+    ci18n_free();
+}
+
+TEST(test_long_language_code_is_rejected)
+{
+    char too_long[CI18N_MAX_CODE_LENGTH + 8];
+
+    ci18n_init();
+
+    memset(too_long, 'c', sizeof(too_long) - 1);
+    too_long[sizeof(too_long) - 1] = '\0';
+
+    /* Truncating used to be quietly destructive: the shortened code was
+     * stored while lookups compared the full string, so the value could be
+     * written and never read, and a second code with the same prefix created
+     * a duplicate, permanently unreachable language. Now it just fails. */
+    ASSERT(ci18n_set(too_long, "k", "v") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_CODE_TOO_LONG);
+    ASSERT(ci18n_get_languages(NULL, 0) == 0);
+
+    ASSERT(ci18n_load_language(too_long, "whatever.txt") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_CODE_TOO_LONG);
+
+    ASSERT(ci18n_load_from_buffer(too_long, "a=b", 3) == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_CODE_TOO_LONG);
+
+    ci18n_free();
+}
+
+/* ============================================================================
+ * Diagnostics
+ * ============================================================================ */
+
+TEST(test_error_string_covers_every_code)
+{
+    /* Every enumerator needs its own text, and nothing may fall through to
+     * the unknown-error catch-all. */
+    ci18n_error_t codes[] = {
+        CI18N_OK,
+        CI18N_ERR_NOT_INITIALIZED,
+        CI18N_ERR_INVALID_ARGUMENT,
+        CI18N_ERR_CODE_TOO_LONG,
+        CI18N_ERR_FILE_NOT_FOUND,
+        CI18N_ERR_OUT_OF_MEMORY,
+        CI18N_ERR_TOO_MANY_LANGUAGES,
+        CI18N_ERR_TOO_MANY_KEYS,
+        CI18N_ERR_LANGUAGE_NOT_FOUND,
+        CI18N_ERR_KEY_NOT_FOUND,
+        CI18N_ERR_PARSE
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(codes) / sizeof(codes[0]); i++)
+    {
+        const char *text = ci18n_error_string(codes[i]);
+
+        ASSERT(text != NULL);
+        ASSERT(strlen(text) > 0);
+        ASSERT(strcmp(text, "unknown error") != 0);
+    }
+
+    /* Out of range still answers, rather than reading past the switch. */
+    ASSERT_STR_EQ(ci18n_error_string((ci18n_error_t)9999), "unknown error");
+}
+
+TEST(test_last_error_before_init)
+{
+    ci18n_init();
+    ci18n_free();
+
+    ASSERT(ci18n_set("en", "k", "v") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_NOT_INITIALIZED);
+
+    ASSERT(ci18n_get("k") == NULL);
+    ASSERT(ci18n_last_error() == CI18N_ERR_NOT_INITIALIZED);
+}
+
+TEST(test_last_error_invalid_argument)
 {
     ci18n_init();
 
-    /* Codes are held in a 16 byte field, so they truncate at 15 characters.
-     * Two codes agreeing on those 15 characters collapse into one language,
-     * and the full string can be written but never selected: ci18n_set()
-     * truncates while ci18n_set_current() compares the whole string. */
-    ASSERT(ci18n_set("long_code_aaaaaa_one", "k", "first") == true);
-    ASSERT(ci18n_count("long_code_aaaaa") == 1);
-    ASSERT(ci18n_count("long_code_aaaaaa_one") == 0);
+    ASSERT(ci18n_set(NULL, "k", "v") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
 
-    ASSERT(ci18n_set_current("long_code_aaaaaa_one") == false);
-    ASSERT(ci18n_set_current("long_code_aaaaa") == true);
-    ASSERT_STR_EQ(ci18n_get("k"), "first");
+    ASSERT(ci18n_get(NULL) == NULL);
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
 
-    /* Worse than a plain collision. Writes truncate but lookups compare the
-     * whole string, so a second over-long code sharing those 15 characters
-     * creates a duplicate slot holding the identical stored code.
-     * ci18n_find_language() always returns the first, so the second is
-     * unreachable and just burns one of CI18N_MAX_LANGUAGES. */
-    ASSERT(ci18n_set("long_code_aaaaaa_two", "k", "second") == true);
-    ASSERT(ci18n_get_languages(NULL, 0) == 2);
+    ci18n_free();
+}
 
+TEST(test_last_error_language_and_key)
+{
+    ci18n_init();
+    ci18n_set("en", "k", "v");
+    ci18n_set_current("en");
+
+    ASSERT(ci18n_set_current("nope") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_LANGUAGE_NOT_FOUND);
+
+    ASSERT(ci18n_remove("nope", "k") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_LANGUAGE_NOT_FOUND);
+
+    ASSERT(ci18n_get("missing") == NULL);
+    ASSERT(ci18n_last_error() == CI18N_ERR_KEY_NOT_FOUND);
+
+    ASSERT(ci18n_remove("en", "missing") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_KEY_NOT_FOUND);
+
+    ci18n_free();
+}
+
+TEST(test_last_error_file_not_found)
+{
+    ci18n_init();
+
+    ASSERT(ci18n_load_language("en", "definitely_not_here.txt") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_FILE_NOT_FOUND);
+
+    ci18n_free();
+}
+
+TEST(test_last_error_limits)
+{
+    char code[CI18N_MAX_CODE_LENGTH];
+    size_t i;
+
+    ci18n_init();
+
+    for (i = 0; i < CI18N_MAX_LANGUAGES; i++)
     {
-        const char *codes[2];
-
-        ASSERT(ci18n_get_languages(codes, 2) == 2);
-        ASSERT_STR_EQ(codes[0], codes[1]);
+        sprintf(code, "l%u", (unsigned int)i);
+        ci18n_set(code, "k", "v");
     }
 
-    /* The second write is invisible: the first slot still answers. */
-    ASSERT_STR_EQ(ci18n_get("k"), "first");
+    ASSERT(ci18n_set("overflow", "k", "v") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_TOO_MANY_LANGUAGES);
+
+    ci18n_free();
+    ci18n_init();
+
+    for (i = 0; i < CI18N_MAX_KEYS_PER_LANGUAGE; i++)
+    {
+        sprintf(code, "k%u", (unsigned int)i);
+        ci18n_set("en", code, "v");
+    }
+
+    ASSERT(ci18n_set("en", "overflow", "v") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_TOO_MANY_KEYS);
+
+    ci18n_free();
+}
+
+TEST(test_success_clears_last_error)
+{
+    ci18n_init();
+
+    ASSERT(ci18n_set(NULL, "k", "v") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
+
+    /* Every successful call has to wipe the previous failure, otherwise the
+     * code would linger and describe something the caller already handled. */
+    ASSERT(ci18n_set("en", "k", "v") == true);
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ci18n_set_current("en");
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ASSERT(ci18n_get("missing") == NULL);
+    ASSERT(ci18n_last_error() == CI18N_ERR_KEY_NOT_FOUND);
+
+    ASSERT_STR_EQ(ci18n_get("k"), "v");
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ci18n_free();
+}
+
+TEST(test_has_does_not_report_a_failure)
+{
+    ci18n_init();
+    ci18n_set("en", "k", "v");
+    ci18n_set_current("en");
+
+    /* A miss from ci18n_has() is an answer, not an error. */
+    ASSERT(ci18n_has("missing") == false);
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ASSERT(ci18n_has("k") == true);
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ci18n_free();
+}
+
+TEST(test_load_stats_clean_file)
+{
+    const ci18n_load_stats_t *st;
+
+    ci18n_init();
+
+    ASSERT(write_text(TEMP_FILE,
+                      "# a comment\n"
+                      "\n"
+                      "a=one\n"
+                      "b=two\n"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    st = ci18n_last_load_stats();
+    ASSERT(st->lines_read == 4);
+    ASSERT(st->entries_loaded == 2);
+    ASSERT(st->lines_skipped == 2);
+    ASSERT(st->lines_malformed == 0);
+    ASSERT(st->first_malformed_line == 0);
+    ASSERT(st->keys_truncated == 0);
+    ASSERT(st->values_truncated == 0);
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_stats_malformed_lines)
+{
+    const ci18n_load_stats_t *st;
+
+    ci18n_init();
+
+    ASSERT(write_text(TEMP_FILE,
+                      "a=one\n"
+                      "no separator here\n"
+                      "b=two\n"
+                      "=empty key\n"));
+
+    /* Still true, because the file was readable. The detail is in the stats,
+     * and the error code flags that something was dropped. */
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_last_error() == CI18N_ERR_PARSE);
+
+    st = ci18n_last_load_stats();
+    ASSERT(st->lines_read == 4);
+    ASSERT(st->entries_loaded == 2);
+    ASSERT(st->lines_malformed == 2);
+    ASSERT(st->first_malformed_line == 2);
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_stats_reports_truncation)
+{
+    char line[CI18N_MAX_KEY_LENGTH + CI18N_MAX_VALUE_LENGTH + 128];
+    const ci18n_load_stats_t *st;
+    size_t pos;
+
+    ci18n_init();
+
+    /* An over-long key, then an over-long value, on separate lines. */
+    pos = 0;
+    memset(line + pos, 'k', CI18N_MAX_KEY_LENGTH + 16);
+    pos += CI18N_MAX_KEY_LENGTH + 16;
+    line[pos++] = '=';
+    line[pos++] = 'v';
+    line[pos++] = '\n';
+    line[pos++] = 'j';
+    line[pos++] = '=';
+    memset(line + pos, 'v', CI18N_MAX_VALUE_LENGTH + 16);
+    pos += CI18N_MAX_VALUE_LENGTH + 16;
+    line[pos++] = '\n';
+
+    ASSERT(write_file(TEMP_FILE, line, pos));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_last_error() == CI18N_ERR_PARSE);
+
+    st = ci18n_last_load_stats();
+    ASSERT(st->keys_truncated == 1);
+
+    /* The over-long value never reaches the value limit, because
+     * CI18N_MAX_LINE_LENGTH and CI18N_MAX_VALUE_LENGTH are both 4096 by
+     * default and the line limit bites first. The line is reported as
+     * truncated, and its tail arrives as a further line with no separator,
+     * which is then counted as malformed. Raise CI18N_MAX_LINE_LENGTH above
+     * CI18N_MAX_VALUE_LENGTH to make values_truncated reachable at all. */
+    ASSERT(st->lines_truncated == 1);
+    ASSERT(st->values_truncated == 0);
+    ASSERT(st->lines_read == 3);
+    ASSERT(st->lines_malformed == 1);
+    ASSERT(st->first_malformed_line == 3);
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_stats_from_buffer)
+{
+    const char *buffer = "a=one\nbad line\nb=two";
+    const ci18n_load_stats_t *st;
+
+    ci18n_init();
+
+    /* The buffer loader keeps the same book as the file loader, including the
+     * final line when the buffer ends without a terminator. */
+    ASSERT(ci18n_load_from_buffer("en", buffer, strlen(buffer)) == true);
+    ASSERT(ci18n_last_error() == CI18N_ERR_PARSE);
+
+    st = ci18n_last_load_stats();
+    ASSERT(st->lines_read == 3);
+    ASSERT(st->entries_loaded == 2);
+    ASSERT(st->lines_malformed == 1);
+    ASSERT(st->first_malformed_line == 2);
+
+    ci18n_free();
+}
+
+TEST(test_load_stats_reset_between_loads)
+{
+    ci18n_init();
+
+    ASSERT(ci18n_load_from_buffer("en", "bad line", 8) == true);
+    ASSERT(ci18n_last_load_stats()->lines_malformed == 1);
+
+    /* A clean load must not inherit the previous one's complaints. */
+    ASSERT(ci18n_load_from_buffer("en", "a=one\n", 6) == true);
+    ASSERT(ci18n_last_load_stats()->lines_malformed == 0);
+    ASSERT(ci18n_last_load_stats()->entries_loaded == 1);
+    ASSERT(ci18n_last_error() == CI18N_OK);
 
     ci18n_free();
 }
@@ -941,7 +1246,22 @@ int main(void)
     RUN_TEST(test_max_keys_per_language);
     RUN_TEST(test_long_key_is_truncated);
     RUN_TEST(test_long_value_is_truncated);
-    RUN_TEST(test_long_language_code_is_truncated);
+    RUN_TEST(test_language_code_at_the_limit);
+    RUN_TEST(test_long_language_code_is_rejected);
+
+    RUN_TEST(test_error_string_covers_every_code);
+    RUN_TEST(test_last_error_before_init);
+    RUN_TEST(test_last_error_invalid_argument);
+    RUN_TEST(test_last_error_language_and_key);
+    RUN_TEST(test_last_error_file_not_found);
+    RUN_TEST(test_last_error_limits);
+    RUN_TEST(test_success_clears_last_error);
+    RUN_TEST(test_has_does_not_report_a_failure);
+    RUN_TEST(test_load_stats_clean_file);
+    RUN_TEST(test_load_stats_malformed_lines);
+    RUN_TEST(test_load_stats_reports_truncation);
+    RUN_TEST(test_load_stats_from_buffer);
+    RUN_TEST(test_load_stats_reset_between_loads);
 
     printf("\n=== Results ===\n");
     printf("Total:   %d\n", tests_run);

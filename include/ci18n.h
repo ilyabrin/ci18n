@@ -120,6 +120,12 @@ extern "C"
 #define CI18N_MAX_LINE_LENGTH 4096
 #endif
 
+/* Includes the terminator, so the default fits a 31 character code. Long
+ * enough for anything BCP 47 produces in practice, such as ca-ES-valencia. */
+#ifndef CI18N_MAX_CODE_LENGTH
+#define CI18N_MAX_CODE_LENGTH 32
+#endif
+
     /* ============================================================================
      * Types
      * ============================================================================ */
@@ -132,18 +138,57 @@ extern "C"
 
     typedef struct ci18n_language
     {
-        char code[16];
+        char code[CI18N_MAX_CODE_LENGTH];
         ci18n_entry_t *entries;
         size_t count;
         size_t capacity;
     } ci18n_language_t;
 
+    /*
+     * Why the last call failed. Every function that can fail sets this, and
+     * every one that succeeds clears it to CI18N_OK, so read it right after
+     * the call you care about.
+     */
+    typedef enum ci18n_error
+    {
+        CI18N_OK = 0,
+        CI18N_ERR_NOT_INITIALIZED,   /* ci18n_init() has not been called */
+        CI18N_ERR_INVALID_ARGUMENT,  /* a NULL or otherwise unusable argument */
+        CI18N_ERR_CODE_TOO_LONG,     /* language code exceeds CI18N_MAX_CODE_LENGTH */
+        CI18N_ERR_FILE_NOT_FOUND,    /* the file could not be opened */
+        CI18N_ERR_OUT_OF_MEMORY,     /* an allocation failed */
+        CI18N_ERR_TOO_MANY_LANGUAGES,/* CI18N_MAX_LANGUAGES reached */
+        CI18N_ERR_TOO_MANY_KEYS,     /* CI18N_MAX_KEYS_PER_LANGUAGE reached */
+        CI18N_ERR_LANGUAGE_NOT_FOUND,/* no such language is loaded */
+        CI18N_ERR_KEY_NOT_FOUND,     /* no such key in the languages consulted */
+        CI18N_ERR_PARSE              /* the load dropped or truncated something */
+    } ci18n_error_t;
+
+    /*
+     * What the last load actually did. A loader returns true whenever it could
+     * read the source, which says nothing about the contents, so this is where
+     * you find out that half the file was silently dropped.
+     */
+    typedef struct ci18n_load_stats
+    {
+        size_t lines_read;           /* lines the loader looked at */
+        size_t entries_loaded;       /* entries added or updated */
+        size_t lines_skipped;        /* comments and blank lines */
+        size_t lines_malformed;      /* no separator, or an empty key */
+        size_t first_malformed_line; /* 1-based, 0 when there were none */
+        size_t keys_truncated;       /* keys cut to CI18N_MAX_KEY_LENGTH */
+        size_t values_truncated;     /* values cut to CI18N_MAX_VALUE_LENGTH */
+        size_t lines_truncated;      /* lines longer than CI18N_MAX_LINE_LENGTH */
+    } ci18n_load_stats_t;
+
     typedef struct ci18n_context
     {
         ci18n_language_t languages[CI18N_MAX_LANGUAGES];
         size_t language_count;
-        char current_language[16];
-        char fallback_language[16];
+        char current_language[CI18N_MAX_CODE_LENGTH];
+        char fallback_language[CI18N_MAX_CODE_LENGTH];
+        ci18n_error_t last_error;
+        ci18n_load_stats_t load_stats;
         bool initialized;
     } ci18n_context_t;
 
@@ -188,15 +233,26 @@ extern "C"
 
     /*
      * Load translations from a file.
-     * File format: key=value (one per line), # for comments
-     * Returns: true on success, false on failure
+     *
+     * File format: key=value, one per line, # or ; for comments. Lines that
+     * carry no separator are skipped. Merges into the language if it already
+     * exists, overwriting the keys it repeats.
+     *
+     * Success means the file was opened and read, not that its contents were
+     * valid: see ci18n_last_load_stats() for what was dropped or truncated.
+     *
+     * Returns: true if the file was read, false on failure
      */
     CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepath);
 
     /*
      * Load translations from a memory buffer.
-     * Buffer should contain newline-separated key=value pairs.
-     * Returns: true on success, false on failure
+     *
+     * Same format and merge behaviour as ci18n_load_language(), and the same
+     * note about what success means. `length` is in bytes and the buffer need
+     * not be NUL terminated.
+     *
+     * Returns: true if the buffer was read, false on failure
      */
     CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length);
 
@@ -267,7 +323,9 @@ extern "C"
     CI18N_DEF size_t ci18n_get_languages(const char **out, size_t capacity);
 
     /*
-     * Add a translation entry programmatically.
+     * Add a translation entry programmatically, creating the language if
+     * needed. Overwrites the key if it already exists.
+     *
      * Returns: true on success, false on failure
      */
     CI18N_DEF bool ci18n_set(const char *language_code, const char *key, const char *value);
@@ -295,6 +353,54 @@ extern "C"
      * Returns: true if initialized, false otherwise
      */
     CI18N_DEF bool ci18n_is_initialized(void);
+
+    /* ============================================================================
+     * Diagnostics
+     * ============================================================================ */
+
+    /*
+     * Why the last call failed.
+     *
+     * Every function that can fail sets this before returning, and every one
+     * that succeeds clears it to CI18N_OK, so read it immediately after the
+     * call you are checking. ci18n_init() and ci18n_free() reset it.
+     *
+     *   if (!ci18n_load_language("en", path)) {
+     *       fprintf(stderr, "%s\n", ci18n_error_string(ci18n_last_error()));
+     *   }
+     *
+     * Returns: the last error code, or CI18N_OK
+     */
+    CI18N_DEF ci18n_error_t ci18n_last_error(void);
+
+    /*
+     * A short English description of an error code, for logs.
+     *
+     * Returns: a static string, never NULL, valid for the program's lifetime
+     */
+    CI18N_DEF const char *ci18n_error_string(ci18n_error_t error);
+
+    /*
+     * What the last ci18n_load_language() or ci18n_load_from_buffer() did.
+     *
+     * A loader returns true whenever it could read its source, which says
+     * nothing about the contents: a file whose every line is malformed still
+     * loads successfully with zero entries. Check here to find out, and note
+     * that a load which dropped or truncated anything also leaves
+     * ci18n_last_error() at CI18N_ERR_PARSE.
+     *
+     *   ci18n_load_language("en", path);
+     *
+     *   const ci18n_load_stats_t *st = ci18n_last_load_stats();
+     *   if (st->lines_malformed) {
+     *       fprintf(stderr, "%s: %u bad lines, first at line %u\n", path,
+     *               (unsigned)st->lines_malformed,
+     *               (unsigned)st->first_malformed_line);
+     *   }
+     *
+     * Returns: the stats of the last load, zeroed if none has run
+     */
+    CI18N_DEF const ci18n_load_stats_t *ci18n_last_load_stats(void);
 
     /* ============================================================================
      * Optional: thread-local context
@@ -419,6 +525,32 @@ static void ci18n_trim(char *str)
     str[len] = '\0';
 }
 
+/* Record a failure and return false, so callers stay one line per check */
+static bool ci18n_fail(ci18n_error_t error)
+{
+    ci18n_ctx.last_error = error;
+    return false;
+}
+
+/* Record success */
+static void ci18n_succeed(void)
+{
+    ci18n_ctx.last_error = CI18N_OK;
+}
+
+/*
+ * A language code has to fit the field whole.
+ *
+ * Truncating here used to be quietly destructive: writes stored the shortened
+ * code while lookups compared the full string, so an over-long code could be
+ * written and never selected, and a second code sharing the same prefix
+ * created a duplicate, permanently unreachable slot.
+ */
+static bool ci18n_code_fits(const char *code)
+{
+    return strlen(code) < CI18N_MAX_CODE_LENGTH;
+}
+
 /* Find language by code, returns index or -1 if not found */
 static int ci18n_find_language(const char *code)
 {
@@ -460,6 +592,7 @@ static ci18n_language_t *ci18n_get_or_create_language(const char *code)
 
     if (ci18n_ctx.language_count >= CI18N_MAX_LANGUAGES)
     {
+        ci18n_fail(CI18N_ERR_TOO_MANY_LANGUAGES);
         return NULL;
     }
 
@@ -475,6 +608,7 @@ static ci18n_language_t *ci18n_get_or_create_language(const char *code)
     lang->entries = (ci18n_entry_t *)malloc(sizeof(ci18n_entry_t) * 64);
     if (!lang->entries)
     {
+        ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
         return NULL;
     }
 
@@ -498,7 +632,7 @@ static bool ci18n_ensure_capacity(ci18n_language_t *lang)
 
     if (lang->count >= CI18N_MAX_KEYS_PER_LANGUAGE)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_TOO_MANY_KEYS);
     }
 
     new_capacity = lang->capacity * 2;
@@ -510,7 +644,7 @@ static bool ci18n_ensure_capacity(ci18n_language_t *lang)
     new_entries = (ci18n_entry_t *)realloc(lang->entries, sizeof(ci18n_entry_t) * new_capacity);
     if (!new_entries)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
     }
 
     lang->entries = new_entries;
@@ -519,7 +653,16 @@ static bool ci18n_ensure_capacity(ci18n_language_t *lang)
 }
 
 /* Parse a single line */
-static bool ci18n_parse_line(ci18n_language_t *lang, const char *line)
+/* What one line turned into, so a loader can keep count */
+typedef enum ci18n_line_result
+{
+    CI18N_LINE_LOADED,    /* an entry was added or updated */
+    CI18N_LINE_SKIPPED,   /* blank line or comment */
+    CI18N_LINE_MALFORMED, /* no separator, or an empty key */
+    CI18N_LINE_FAILED     /* out of room or out of memory */
+} ci18n_line_result_t;
+
+static ci18n_line_result_t ci18n_parse_line(ci18n_language_t *lang, const char *line)
 {
     const char *eq;
     char key[CI18N_MAX_KEY_LENGTH];
@@ -527,6 +670,7 @@ static bool ci18n_parse_line(ci18n_language_t *lang, const char *line)
     ci18n_entry_t *entry;
     int existing;
     size_t key_len;
+    size_t raw_key_len;
 
     /* Skip a UTF-8 BOM. Editors on Windows often prepend one, and without this
      * the first key of the file would silently become "\xEF\xBB\xBFkey" and be
@@ -543,28 +687,39 @@ static bool ci18n_parse_line(ci18n_language_t *lang, const char *line)
         line++;
     if (*line == '\0' || *line == '#' || *line == ';')
     {
-        return true;
+        return CI18N_LINE_SKIPPED;
     }
 
     /* Find equals sign */
     eq = strchr(line, '=');
     if (!eq)
     {
-        return false;
+        return CI18N_LINE_MALFORMED;
     }
 
-    /* Extract key */
-    key_len = CI18N_MIN((size_t)(eq - line), CI18N_MAX_KEY_LENGTH - 1);
+    /* Extract key, noting if it did not fit */
+    raw_key_len = (size_t)(eq - line);
+    key_len = CI18N_MIN(raw_key_len, CI18N_MAX_KEY_LENGTH - 1);
+    if (key_len < raw_key_len)
+    {
+        ci18n_ctx.load_stats.keys_truncated++;
+    }
+
     memcpy(key, line, key_len);
     key[key_len] = '\0';
     ci18n_trim(key);
 
     if (strlen(key) == 0)
     {
-        return false;
+        return CI18N_LINE_MALFORMED;
     }
 
-    /* Extract value */
+    /* Extract value, noting if it did not fit */
+    if (strlen(eq + 1) > CI18N_MAX_VALUE_LENGTH - 1)
+    {
+        ci18n_ctx.load_stats.values_truncated++;
+    }
+
     ci18n_copy(value, CI18N_MAX_VALUE_LENGTH, eq + 1);
     ci18n_trim(value);
 
@@ -574,18 +729,72 @@ static bool ci18n_parse_line(ci18n_language_t *lang, const char *line)
     {
         /* Update existing entry */
         ci18n_copy(lang->entries[existing].value, CI18N_MAX_VALUE_LENGTH, value);
-        return true;
+        return CI18N_LINE_LOADED;
     }
 
     /* Add new entry */
     if (!ci18n_ensure_capacity(lang))
     {
-        return false;
+        return CI18N_LINE_FAILED;
     }
 
     entry = &lang->entries[lang->count++];
     ci18n_copy(entry->key, CI18N_MAX_KEY_LENGTH, key);
     ci18n_copy(entry->value, CI18N_MAX_VALUE_LENGTH, value);
+
+    return CI18N_LINE_LOADED;
+}
+
+/* Fold one line's outcome into the stats of the load in progress */
+static void ci18n_record_line(ci18n_line_result_t result, size_t line_number)
+{
+    ci18n_ctx.load_stats.lines_read++;
+
+    switch (result)
+    {
+    case CI18N_LINE_LOADED:
+        ci18n_ctx.load_stats.entries_loaded++;
+        break;
+
+    case CI18N_LINE_SKIPPED:
+        ci18n_ctx.load_stats.lines_skipped++;
+        break;
+
+    case CI18N_LINE_MALFORMED:
+    case CI18N_LINE_FAILED:
+        ci18n_ctx.load_stats.lines_malformed++;
+        if (ci18n_ctx.load_stats.first_malformed_line == 0)
+        {
+            ci18n_ctx.load_stats.first_malformed_line = line_number;
+        }
+        break;
+    }
+}
+
+/* Start a load with a clean slate of statistics */
+static void ci18n_reset_load_stats(void)
+{
+    memset(&ci18n_ctx.load_stats, 0, sizeof(ci18n_ctx.load_stats));
+}
+
+/*
+ * Close out a load. Reading the source counts as success, so a file of pure
+ * garbage still returns true; anything dropped or truncated is reported
+ * through the error code and the stats instead.
+ */
+static bool ci18n_finish_load(void)
+{
+    const ci18n_load_stats_t *st = &ci18n_ctx.load_stats;
+
+    if (st->lines_malformed > 0 || st->keys_truncated > 0 ||
+        st->values_truncated > 0 || st->lines_truncated > 0)
+    {
+        ci18n_ctx.last_error = CI18N_ERR_PARSE;
+    }
+    else
+    {
+        ci18n_succeed();
+    }
 
     return true;
 }
@@ -632,40 +841,65 @@ CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepa
     FILE *file;
     char line[CI18N_MAX_LINE_LENGTH];
     ci18n_language_t *lang;
+    size_t line_number = 0;
 
-    if (!ci18n_ctx.initialized || !language_code || !filepath)
+    if (!ci18n_ctx.initialized)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code || !filepath)
+    {
+        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    if (!ci18n_code_fits(language_code))
+    {
+        return ci18n_fail(CI18N_ERR_CODE_TOO_LONG);
     }
 
     file = fopen(filepath, "r");
     if (!file)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_FILE_NOT_FOUND);
     }
 
+    /* Created only after the file opened, so a missing file leaves no empty
+     * language behind. */
     lang = ci18n_get_or_create_language(language_code);
     if (!lang)
     {
         fclose(file);
-        return false;
+        return false; /* get_or_create already recorded why */
     }
+
+    ci18n_reset_load_stats();
 
     while (fgets(line, sizeof(line), file))
     {
+        size_t len = strlen(line);
+
+        line_number++;
+
+        /* A line that filled the buffer without a terminator was cut, and its
+         * tail will arrive as a separate line on the next read. */
+        if (len == sizeof(line) - 1 && line[len - 1] != '\n' && line[len - 1] != '\r')
+        {
+            ci18n_ctx.load_stats.lines_truncated++;
+        }
+
         /* Strip the line terminator. One loop covers LF, CRLF and a lone CR,
          * so a file authored on any platform parses the same way. */
-        size_t len = strlen(line);
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
         {
             line[--len] = '\0';
         }
 
-        ci18n_parse_line(lang, line);
+        ci18n_record_line(ci18n_parse_line(lang, line), line_number);
     }
 
     fclose(file);
-    return true;
+    return ci18n_finish_load();
 }
 
 CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length)
@@ -674,17 +908,31 @@ CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buf
     char line[CI18N_MAX_LINE_LENGTH];
     size_t pos = 0;
     size_t line_pos = 0;
+    size_t line_number = 0;
+    bool line_cut = false;
 
-    if (!ci18n_ctx.initialized || !language_code || !buffer)
+    if (!ci18n_ctx.initialized)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code || !buffer)
+    {
+        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    if (!ci18n_code_fits(language_code))
+    {
+        return ci18n_fail(CI18N_ERR_CODE_TOO_LONG);
     }
 
     lang = ci18n_get_or_create_language(language_code);
     if (!lang)
     {
-        return false;
+        return false; /* get_or_create already recorded why */
     }
+
+    ci18n_reset_load_stats();
 
     while (pos < length)
     {
@@ -693,8 +941,10 @@ CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buf
         if (c == '\n' || c == '\r')
         {
             line[line_pos] = '\0';
-            ci18n_parse_line(lang, line);
+            line_number++;
+            ci18n_record_line(ci18n_parse_line(lang, line), line_number);
             line_pos = 0;
+            line_cut = false;
 
             /* Skip \r\n pairs */
             if (c == '\r' && pos < length && buffer[pos] == '\n')
@@ -708,6 +958,13 @@ CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buf
             {
                 line[line_pos++] = c;
             }
+            else if (!line_cut)
+            {
+                /* Everything past the buffer is dropped, unlike the file
+                 * loader where the tail resurfaces as another line. */
+                ci18n_ctx.load_stats.lines_truncated++;
+                line_cut = true;
+            }
         }
     }
 
@@ -715,41 +972,54 @@ CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buf
     if (line_pos > 0)
     {
         line[line_pos] = '\0';
-        ci18n_parse_line(lang, line);
+        line_number++;
+        ci18n_record_line(ci18n_parse_line(lang, line), line_number);
     }
 
-    return true;
+    return ci18n_finish_load();
 }
 
 CI18N_DEF bool ci18n_set_current(const char *language_code)
 {
-    if (!ci18n_ctx.initialized || !language_code)
+    if (!ci18n_ctx.initialized)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code)
+    {
+        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
     }
 
     if (ci18n_find_language(language_code) < 0)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
     }
 
     ci18n_copy(ci18n_ctx.current_language, sizeof(ci18n_ctx.current_language), language_code);
+    ci18n_succeed();
     return true;
 }
 
 CI18N_DEF bool ci18n_set_fallback(const char *language_code)
 {
-    if (!ci18n_ctx.initialized || !language_code)
+    if (!ci18n_ctx.initialized)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code)
+    {
+        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
     }
 
     if (ci18n_find_language(language_code) < 0)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
     }
 
     ci18n_copy(ci18n_ctx.fallback_language, sizeof(ci18n_ctx.fallback_language), language_code);
+    ci18n_succeed();
     return true;
 }
 
@@ -759,8 +1029,15 @@ CI18N_DEF const char *ci18n_get(const char *key)
     ci18n_language_t *lang;
     int entry_idx;
 
-    if (!ci18n_ctx.initialized || !key)
+    if (!ci18n_ctx.initialized)
     {
+        ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return NULL;
+    }
+
+    if (!key)
+    {
+        ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
         return NULL;
     }
 
@@ -774,6 +1051,7 @@ CI18N_DEF const char *ci18n_get(const char *key)
             entry_idx = ci18n_find_entry(lang, key);
             if (entry_idx >= 0)
             {
+                ci18n_succeed();
                 return lang->entries[entry_idx].value;
             }
         }
@@ -789,11 +1067,13 @@ CI18N_DEF const char *ci18n_get(const char *key)
             entry_idx = ci18n_find_entry(lang, key);
             if (entry_idx >= 0)
             {
+                ci18n_succeed();
                 return lang->entries[entry_idx].value;
             }
         }
     }
 
+    ci18n_fail(CI18N_ERR_KEY_NOT_FOUND);
     return NULL;
 }
 
@@ -805,7 +1085,16 @@ CI18N_DEF const char *ci18n_get_or_key(const char *key)
 
 CI18N_DEF bool ci18n_has(const char *key)
 {
-    return ci18n_get(key) != NULL;
+    ci18n_error_t before = ci18n_ctx.last_error;
+    bool found = ci18n_get(key) != NULL;
+
+    /* Asking is not failing: a miss here must not look like a failed call. */
+    if (!found && ci18n_ctx.last_error == CI18N_ERR_KEY_NOT_FOUND)
+    {
+        ci18n_ctx.last_error = before;
+    }
+
+    return found;
 }
 
 CI18N_DEF const char *ci18n_get_current(void)
@@ -824,8 +1113,11 @@ CI18N_DEF size_t ci18n_get_languages(const char **out, size_t capacity)
 
     if (!ci18n_ctx.initialized)
     {
+        ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
         return 0;
     }
+
+    ci18n_succeed();
 
     if (out)
     {
@@ -845,15 +1137,25 @@ CI18N_DEF bool ci18n_set(const char *language_code, const char *key, const char 
     ci18n_entry_t *entry;
     int existing;
 
-    if (!ci18n_ctx.initialized || !language_code || !key || !value)
+    if (!ci18n_ctx.initialized)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code || !key || !value)
+    {
+        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    if (!ci18n_code_fits(language_code))
+    {
+        return ci18n_fail(CI18N_ERR_CODE_TOO_LONG);
     }
 
     lang = ci18n_get_or_create_language(language_code);
     if (!lang)
     {
-        return false;
+        return false; /* get_or_create already recorded why */
     }
 
     /* Check if key already exists */
@@ -861,19 +1163,21 @@ CI18N_DEF bool ci18n_set(const char *language_code, const char *key, const char 
     if (existing >= 0)
     {
         ci18n_copy(lang->entries[existing].value, CI18N_MAX_VALUE_LENGTH, value);
+        ci18n_succeed();
         return true;
     }
 
     /* Add new entry */
     if (!ci18n_ensure_capacity(lang))
     {
-        return false;
+        return false; /* ensure_capacity already recorded why */
     }
 
     entry = &lang->entries[lang->count++];
     ci18n_copy(entry->key, CI18N_MAX_KEY_LENGTH, key);
     ci18n_copy(entry->value, CI18N_MAX_VALUE_LENGTH, value);
 
+    ci18n_succeed();
     return true;
 }
 
@@ -883,15 +1187,20 @@ CI18N_DEF bool ci18n_remove(const char *language_code, const char *key)
     ci18n_language_t *lang;
     int entry_idx;
 
-    if (!ci18n_ctx.initialized || !language_code || !key)
+    if (!ci18n_ctx.initialized)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code || !key)
+    {
+        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
     }
 
     lang_idx = ci18n_find_language(language_code);
     if (lang_idx < 0)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
     }
 
     lang = &ci18n_ctx.languages[lang_idx];
@@ -899,7 +1208,7 @@ CI18N_DEF bool ci18n_remove(const char *language_code, const char *key)
 
     if (entry_idx < 0)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_KEY_NOT_FOUND);
     }
 
     /* Shift remaining entries */
@@ -911,6 +1220,7 @@ CI18N_DEF bool ci18n_remove(const char *language_code, const char *key)
     }
 
     lang->count--;
+    ci18n_succeed();
     return true;
 }
 
@@ -919,15 +1229,20 @@ CI18N_DEF bool ci18n_clear(const char *language_code)
     int lang_idx;
     ci18n_language_t *lang;
 
-    if (!ci18n_ctx.initialized || !language_code)
+    if (!ci18n_ctx.initialized)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code)
+    {
+        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
     }
 
     lang_idx = ci18n_find_language(language_code);
     if (lang_idx < 0)
     {
-        return false;
+        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
     }
 
     lang = &ci18n_ctx.languages[lang_idx];
@@ -943,6 +1258,7 @@ CI18N_DEF bool ci18n_clear(const char *language_code)
     }
 
     lang->count = 0;
+    ci18n_succeed();
     return true;
 }
 
@@ -950,23 +1266,73 @@ CI18N_DEF size_t ci18n_count(const char *language_code)
 {
     int lang_idx;
 
-    if (!ci18n_ctx.initialized || !language_code)
+    if (!ci18n_ctx.initialized)
     {
+        ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return 0;
+    }
+
+    if (!language_code)
+    {
+        ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
         return 0;
     }
 
     lang_idx = ci18n_find_language(language_code);
     if (lang_idx < 0)
     {
+        ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
         return 0;
     }
 
+    ci18n_succeed();
     return ci18n_ctx.languages[lang_idx].count;
 }
 
 CI18N_DEF bool ci18n_is_initialized(void)
 {
     return ci18n_ctx.initialized;
+}
+
+CI18N_DEF ci18n_error_t ci18n_last_error(void)
+{
+    return ci18n_ctx.last_error;
+}
+
+CI18N_DEF const char *ci18n_error_string(ci18n_error_t error)
+{
+    switch (error)
+    {
+    case CI18N_OK:
+        return "no error";
+    case CI18N_ERR_NOT_INITIALIZED:
+        return "ci18n_init() has not been called";
+    case CI18N_ERR_INVALID_ARGUMENT:
+        return "invalid argument";
+    case CI18N_ERR_CODE_TOO_LONG:
+        return "language code is too long";
+    case CI18N_ERR_FILE_NOT_FOUND:
+        return "translation file could not be opened";
+    case CI18N_ERR_OUT_OF_MEMORY:
+        return "out of memory";
+    case CI18N_ERR_TOO_MANY_LANGUAGES:
+        return "too many languages";
+    case CI18N_ERR_TOO_MANY_KEYS:
+        return "too many keys in this language";
+    case CI18N_ERR_LANGUAGE_NOT_FOUND:
+        return "no such language is loaded";
+    case CI18N_ERR_KEY_NOT_FOUND:
+        return "no such key";
+    case CI18N_ERR_PARSE:
+        return "the load dropped or truncated something";
+    }
+
+    return "unknown error";
+}
+
+CI18N_DEF const ci18n_load_stats_t *ci18n_last_load_stats(void)
+{
+    return &ci18n_ctx.load_stats;
 }
 
 #ifdef CI18N_THREAD_LOCAL_CONTEXT

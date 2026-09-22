@@ -22,10 +22,26 @@ int main(void) {
         return 1;
     }
 
-    /* Load translations from files. */
-    ci18n_load_language("en", "translations/en.txt");
+    /* Load translations from files. A loader returns false only when it could
+     * not read the source at all, so check the error for the reason. */
+    if (!ci18n_load_language("en", "translations/en.txt")) {
+        fprintf(stderr, "en: %s\n", ci18n_error_string(ci18n_last_error()));
+    }
+
     ci18n_load_language("ru", "translations/ru.txt");
     ci18n_load_language("es", "translations/es.txt");
+
+    /* Reading the file says nothing about its contents, so ask what the load
+     * actually did with them. */
+    {
+        const ci18n_load_stats_t *st = ci18n_last_load_stats();
+
+        if (st->lines_malformed > 0) {
+            fprintf(stderr, "es: %u bad lines, first at line %u\n",
+                    (unsigned int)st->lines_malformed,
+                    (unsigned int)st->first_malformed_line);
+        }
+    }
 
     /* Or from a buffer, handy for translations baked into the binary. */
     const char *fr =

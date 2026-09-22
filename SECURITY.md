@@ -38,18 +38,28 @@ gracefully on any input.
 **Not vulnerabilities, but known sharp edges.** These are documented behaviour
 rather than bugs, though we would like to improve them:
 
-- **Silent truncation.** A key longer than `CI18N_MAX_KEY_LENGTH`, a value
-  longer than `CI18N_MAX_VALUE_LENGTH`, or a line longer than
-  `CI18N_MAX_LINE_LENGTH` is truncated without any signal to the caller.
-- **No parse diagnostics.** `ci18n_load_language()` returns `true` for a file
-  whose every line is malformed. It reports only whether the file could be
-  opened.
+- **Truncation.** A key longer than `CI18N_MAX_KEY_LENGTH`, a value longer than
+  `CI18N_MAX_VALUE_LENGTH`, or a line longer than `CI18N_MAX_LINE_LENGTH` is
+  truncated. It is counted in `ci18n_last_load_stats()`, but the entry is kept
+  in its shortened form rather than rejected.
+- **Success means readable, not valid.** `ci18n_load_language()` returns `true`
+  for a file whose every line is malformed. It reports only whether the source
+  could be read. What was dropped or truncated is available through
+  `ci18n_last_load_stats()`, and such a load leaves `ci18n_last_error()` at
+  `CI18N_ERR_PARSE`, but a caller that checks only the return value sees
+  nothing.
+- **Line limit before value limit.** `CI18N_MAX_LINE_LENGTH` and
+  `CI18N_MAX_VALUE_LENGTH` are both 4096 by default, so an over-long value is
+  cut by the line limit and its tail is then parsed as a separate, malformed
+  line.
 - **Pointer lifetime.** A `const char *` from `ci18n_get()` is invalidated by
   the next `ci18n_set()` or `ci18n_load_*()` on that language, because the
   entry array is reallocated. Holding one across a load is a use-after-free in
   your code, not in ours.
 - **Capacity limits.** Loading more than `CI18N_MAX_LANGUAGES` languages or
-  `CI18N_MAX_KEYS_PER_LANGUAGE` keys silently drops the excess.
+  `CI18N_MAX_KEYS_PER_LANGUAGE` keys drops the excess. The call returns false
+  with `CI18N_ERR_TOO_MANY_LANGUAGES` or `CI18N_ERR_TOO_MANY_KEYS`, but a load
+  in progress keeps going and reports the rest through the load stats.
 
 **Out of scope.** Translation *content*. ci18n hands you back whatever bytes
 the file contained, with leading and trailing whitespace trimmed. If you pass a
