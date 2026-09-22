@@ -13,6 +13,30 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## 2.6.1 - 2026-09-22
+
+### Fixed
+
+- **The shared threading mode provided no mutual exclusion on macOS.** The
+  default catalogue's lock was never statically initialised, only zeroed.
+  `PTHREAD_RWLOCK_INITIALIZER` happens to be all zeros on glibc, so it worked
+  there by accident; on macOS the initialiser carries a signature, a zeroed
+  lock is invalid, and every `pthread_rwlock_rdlock` returned `EINVAL` and did
+  nothing. Readers saw torn state immediately, which is how CI caught it.
+
+  `CI18N_RWLOCK_INIT` existed all along and was simply never used.
+
+- Lock failures now abort with a message instead of being ignored. An rwlock
+  call only fails when the lock is unusable, and continuing then means running
+  with no mutual exclusion, which is exactly how the bug above stayed hidden
+  on one platform while passing on two others. Define `CI18N_LOCK_FAILED` to
+  handle it differently.
+
+This is the second bug of this shape in the project: a platform where the
+mechanism silently does nothing rather than refusing. The first was
+`__declspec(thread)` being ignored by MinGW gcc. Both were found by running
+the mode on more than one platform, not by reading the code.
+
 ## 2.6.0 - 2026-09-22
 
 Explicit catalogues, so ci18n can be used inside a library.

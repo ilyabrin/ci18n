@@ -65,7 +65,9 @@ static void *reader(void *arg)
         {
             if (strcmp(buffer, "first") != 0 && strcmp(buffer, "second") != 0)
             {
-                fail("reader saw a value no writer published");
+                printf("FAILED: reader saw [%s] (len %u), which no writer "
+                       "published\n", buffer, (unsigned int)len);
+                failures = 1;
                 return NULL;
             }
             seen++;

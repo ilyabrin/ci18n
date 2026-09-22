@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.6.0
+ * ci18n.h - v2.6.1
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -56,8 +56,8 @@ Second line.
 
 #define CI18N_VERSION_MAJOR 2
 #define CI18N_VERSION_MINOR 6
-#define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.6.0"
+#define CI18N_VERSION_PATCH 1
+#define CI18N_VERSION_STRING "2.6.1"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -181,10 +181,15 @@ extern "C"
  * --------------------------------------------------------------------------- */
 #ifdef CI18N_THREAD_SHARED
 
+/* For the abort path below, which has to work wherever the lock is used. */
+#include <stdio.h>
+#include <stdlib.h>
+
 #if defined(_WIN32)
 #include <windows.h>
 typedef SRWLOCK ci18n_rwlock_t;
 #define CI18N_RWLOCK_INIT SRWLOCK_INIT
+/* These return void: there is nothing to check. */
 #define ci18n_rwlock_read(l) AcquireSRWLockShared(l)
 #define ci18n_rwlock_read_unlock(l) ReleaseSRWLockShared(l)
 #define ci18n_rwlock_write(l) AcquireSRWLockExclusive(l)
@@ -204,10 +209,57 @@ typedef SRWLOCK ci18n_rwlock_t;
 #include <pthread.h>
 typedef pthread_rwlock_t ci18n_rwlock_t;
 #define CI18N_RWLOCK_INIT PTHREAD_RWLOCK_INITIALIZER
-#define ci18n_rwlock_read(l) pthread_rwlock_rdlock(l)
-#define ci18n_rwlock_read_unlock(l) pthread_rwlock_unlock(l)
-#define ci18n_rwlock_write(l) pthread_rwlock_wrlock(l)
-#define ci18n_rwlock_write_unlock(l) pthread_rwlock_unlock(l)
+
+/*
+ * The return codes are checked, and a failure aborts.
+ *
+ * Not defensive programming: an rwlock call only fails when the lock itself is
+ * unusable, and carrying on then means running with no mutual exclusion at
+ * all. That is precisely how the macOS bug in 2.6.0 stayed hidden, where a
+ * lock that was zeroed rather than properly initialised returned EINVAL from
+ * every call and silently did nothing. Dying loudly is better than
+ * pretending.
+ *
+ * Define CI18N_LOCK_FAILED yourself to handle it some other way.
+ */
+#ifndef CI18N_LOCK_FAILED
+#define CI18N_LOCK_FAILED(what)                                          \
+    do                                                                   \
+    {                                                                    \
+        fprintf(stderr, "ci18n: %s failed, the catalogue is unprotected " \
+                        "and continuing would be worse\n", what);        \
+        abort();                                                         \
+    } while (0)
+#endif
+
+#define ci18n_rwlock_read(l)                     \
+    do                                           \
+    {                                            \
+        if (pthread_rwlock_rdlock(l) != 0)       \
+        {                                        \
+            CI18N_LOCK_FAILED("read lock");      \
+        }                                        \
+    } while (0)
+
+#define ci18n_rwlock_write(l)                    \
+    do                                           \
+    {                                            \
+        if (pthread_rwlock_wrlock(l) != 0)       \
+        {                                        \
+            CI18N_LOCK_FAILED("write lock");     \
+        }                                        \
+    } while (0)
+
+#define ci18n_rwlock_read_unlock(l)              \
+    do                                           \
+    {                                            \
+        if (pthread_rwlock_unlock(l) != 0)       \
+        {                                        \
+            CI18N_LOCK_FAILED("unlock");         \
+        }                                        \
+    } while (0)
+
+#define ci18n_rwlock_write_unlock(l) ci18n_rwlock_read_unlock(l)
 #endif
 
 #endif /* CI18N_THREAD_SHARED */
@@ -936,7 +988,16 @@ static CI18N_THREAD_LOCAL ci18n_load_stats_t ci18n_tls_stats;
 #define CI18N_ERROR_SLOT(c) (*((void)(c), &ci18n_tls_error))
 #define CI18N_STATS_SLOT(c) (*((void)(c), &ci18n_tls_stats))
 
-static ci18n_context_t ci18n_ctx;
+/*
+ * The lock is initialised statically, which is what makes it usable before
+ * ci18n_init() and removes any question of who initialises it first.
+ *
+ * Leaving it merely zeroed was the 2.6.0 bug: on glibc
+ * PTHREAD_RWLOCK_INITIALIZER is all zeros so it worked by accident, while on
+ * macOS the initialiser carries a signature, a zeroed lock is invalid, and
+ * every call returned EINVAL and did nothing.
+ */
+static ci18n_context_t ci18n_ctx = {.lock = CI18N_RWLOCK_INIT};
 
 #else /* not CI18N_THREAD_SHARED */
 
