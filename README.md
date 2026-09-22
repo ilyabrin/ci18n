@@ -12,7 +12,7 @@ Lightweight internationalization (i18n) library for pure C projects.
 - ✅ Multiple language support
 - ✅ Load from files and buffers
 - ✅ Fallback language
-- ✅ Thread-safe mode (optional)
+- ✅ Thread-local context (optional)
 - ✅ UTF-8 compatible, skips a BOM in translation files
 
 ## Quick Start
@@ -50,6 +50,20 @@ printf("%s\n", ci18n_get("welcome_message"));
 printf("%s\n", ci18n_get_or_key("missing_key"));
 ```
 
+To list what is loaded, pass a buffer you own. The return value is the total
+number of languages, which can exceed your capacity:
+
+```c
+const char *codes[CI18N_MAX_LANGUAGES];
+size_t total = ci18n_get_languages(codes, CI18N_MAX_LANGUAGES);
+
+for (size_t i = 0; i < total; i++) {
+    printf("  - %s\n", codes[i]);
+}
+```
+
+Pass `NULL` to ask for the count alone: `ci18n_get_languages(NULL, 0)`.
+
 ### 4. Cleanup
 
 ```c
@@ -74,7 +88,7 @@ Define macros before including the header to configure:
 #define CI18N_MAX_VALUE_LENGTH 4096
 #define CI18N_MAX_LANGUAGES 32
 #define CI18N_MAX_KEYS_PER_LANGUAGE 1024
-#define CI18N_THREAD_SAFE  /* for thread safety */
+#define CI18N_THREAD_LOCAL_CONTEXT  /* one context per thread */
 #include "ci18n.h"
 ```
 
@@ -90,6 +104,39 @@ library is linked:
 ```
 
 With `static`, expect `-Wunused-function` for any API you do not call.
+
+### Threads
+
+`CI18N_THREAD_LOCAL_CONTEXT` gives every thread its own context. Read that
+literally: it is isolation, not shared thread safety. Each thread starts empty
+and calls `ci18n_init()` and the loaders itself, and a language loaded on one
+thread is invisible to the others. That suits a worker rendering in one user's
+locale.
+
+What it does not give you is "load once, read from many threads". Without the
+macro the context is a single global with no locking, so a concurrent
+`ci18n_set()` or `ci18n_load_*()` against a concurrent `ci18n_get()` is a data
+race. If your threads only read, and every load finished before you spawned
+them, the plain global is already safe.
+
+`CI18N_THREAD_SAFE` is the old name for this macro. It still works and still
+means exactly the same thing, but it emits a deprecation note.
+
+### Pointer lifetime
+
+Every `const char *` the API returns points into library storage, so it stays
+valid only until the next call that mutates that language:
+
+```c
+const char *greeting = ci18n_get("greeting");
+ci18n_load_language("en", "extra.txt");   /* may realloc */
+puts(greeting);                           /* dangling */
+```
+
+`ci18n_set()`, `ci18n_remove()` and the loaders may reallocate the entry array.
+`ci18n_clear()`, `ci18n_free()` and `ci18n_set_current()` invalidate pointers
+outright. Read a translation right before you use it, which is cheap, or copy
+it if you need to hold on to it.
 
 ### Version check
 
@@ -118,7 +165,7 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_remove(lang, key)`                | Remove translation    |
 | `ci18n_clear(lang)`                      | Clear language        |
 | `ci18n_count(lang)`                      | Entry count           |
-| `ci18n_get_languages(&count)`            | List of languages     |
+| `ci18n_get_languages(out, cap)`          | List of languages     |
 
 ## Building
 

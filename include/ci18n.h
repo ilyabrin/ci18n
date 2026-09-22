@@ -76,6 +76,21 @@
 #define CI18N_DEF extern
 #endif
 
+/* ============================================================================
+ * Deprecated macros
+ * ============================================================================ */
+
+/* CI18N_THREAD_SAFE was a misleading name: it never added locking, it gave
+ * each thread a separate context. Kept working, but prefer the new name. */
+#ifdef CI18N_THREAD_SAFE
+#ifndef CI18N_THREAD_LOCAL_CONTEXT
+#define CI18N_THREAD_LOCAL_CONTEXT
+#endif
+#if defined(_MSC_VER) || defined(__GNUC__) || defined(__clang__)
+#pragma message("ci18n: CI18N_THREAD_SAFE is deprecated, use CI18N_THREAD_LOCAL_CONTEXT")
+#endif
+#endif
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -133,6 +148,35 @@ extern "C"
     } ci18n_context_t;
 
     /* ============================================================================
+     * Pointer lifetime
+     * ============================================================================
+     *
+     * Every `const char *` this API returns points into library storage, not
+     * into a copy you own. Such a pointer stays valid only until the next call
+     * that mutates the language it came from:
+     *
+     *   ci18n_set(), ci18n_remove(), ci18n_load_language() and
+     *   ci18n_load_from_buffer() may reallocate the entry array
+     *
+     *   ci18n_clear(), ci18n_free() and ci18n_set_current() invalidate
+     *   pointers outright
+     *
+     * So this is a use-after-free:
+     *
+     *   const char *greeting = ci18n_get("greeting");
+     *   ci18n_load_language("en", "extra.txt");   // may realloc
+     *   puts(greeting);                           // dangling
+     *
+     * Read a translation right before you use it, which is cheap, or copy it
+     * if you need to hold it:
+     *
+     *   char greeting[64];
+     *   snprintf(greeting, sizeof(greeting), "%s", ci18n_get_or_key("greeting"));
+     *
+     * Note that ci18n_get_or_key() can also hand back the `key` pointer you
+     * passed in, so the lifetime is then your string literal's, not ours.
+     *
+     * ============================================================================
      * Public API
      * ============================================================================ */
 
@@ -169,13 +213,21 @@ extern "C"
     CI18N_DEF bool ci18n_set_fallback(const char *language_code);
 
     /*
-     * Get translation for a key in current language.
+     * Get translation for a key in the current language, falling back to the
+     * fallback language if set.
+     *
+     * The result points into library storage. See "Pointer lifetime" above.
+     *
      * Returns: translation string or NULL if not found
      */
     CI18N_DEF const char *ci18n_get(const char *key);
 
     /*
-     * Get translation with fallback to key itself if not found.
+     * Get translation with fallback to the key itself if not found.
+     *
+     * The result points either into library storage or at the `key` you
+     * passed in. See "Pointer lifetime" above.
+     *
      * Returns: translation string or the key if not found
      */
     CI18N_DEF const char *ci18n_get_or_key(const char *key);
@@ -188,15 +240,31 @@ extern "C"
 
     /*
      * Get the current language code.
+     *
+     * The result points into library storage and is invalidated by
+     * ci18n_set_current() and ci18n_free().
+     *
      * Returns: language code string or empty string if not set
      */
     CI18N_DEF const char *ci18n_get_current(void);
 
     /*
-     * Get list of available language codes.
-     * Returns: pointer to array of language codes, sets count
+     * List the loaded language codes into a buffer you own.
+     *
+     * Writes at most `capacity` codes into `out` and returns how many
+     * languages are loaded in total, which may exceed `capacity`. Pass
+     * out = NULL to ask for that total without writing anything:
+     *
+     *   const char *codes[8];
+     *   size_t total = ci18n_get_languages(codes, 8);
+     *   size_t n = total < 8 ? total : 8;
+     *   for (size_t i = 0; i < n; i++) puts(codes[i]);
+     *
+     * The codes point into library storage. See "Pointer lifetime" above.
+     *
+     * Returns: total number of loaded languages
      */
-    CI18N_DEF const char **ci18n_get_languages(size_t *count);
+    CI18N_DEF size_t ci18n_get_languages(const char **out, size_t capacity);
 
     /*
      * Add a translation entry programmatically.
@@ -229,11 +297,26 @@ extern "C"
     CI18N_DEF bool ci18n_is_initialized(void);
 
     /* ============================================================================
-     * Optional: Thread-safe version (define CI18N_THREAD_SAFE before including)
-     * ============================================================================ */
+     * Optional: thread-local context
+     * ============================================================================
+     *
+     * Define CI18N_THREAD_LOCAL_CONTEXT before including this header to give
+     * every thread its own context.
+     *
+     * Read that literally: it is isolation, not shared thread safety. Each
+     * thread starts empty and must call ci18n_init() and load its own
+     * translations, and a language loaded on one thread is invisible to the
+     * others. It suits a worker that renders in one user's locale.
+     *
+     * What it does NOT give you is "load once, read from N threads". Without
+     * this macro the context is a single global with no locking, so concurrent
+     * ci18n_set() or ci18n_load_*() against concurrent ci18n_get() is a data
+     * race. If your threads only read, and every load happened before you
+     * spawned them, the default global is safe as is.
+     */
 
-#ifdef CI18N_THREAD_SAFE
-    /* Get thread-local context for manual control */
+#ifdef CI18N_THREAD_LOCAL_CONTEXT
+    /* Get the calling thread's context for manual control */
     CI18N_DEF ci18n_context_t *ci18n_get_context(void);
 #endif
 
@@ -256,14 +339,20 @@ extern "C"
 /* Internal helper macros */
 #define CI18N_MIN(a, b) ((a) < (b) ? (a) : (b))
 
-#ifdef CI18N_THREAD_SAFE
-#ifdef _WIN32
-#include <windows.h>
+#ifdef CI18N_THREAD_LOCAL_CONTEXT
+/* Pick the storage keyword by compiler, not by OS.
+ *
+ * MinGW gcc defines _WIN32 but rejects __declspec(thread): it ignores the
+ * attribute with a warning, which silently turns the per-thread context back
+ * into one shared global. Ask the compiler what it speaks instead. */
+#if defined(_MSC_VER)
 #define CI18N_THREAD_LOCAL __declspec(thread)
 #elif defined(__GNUC__) || defined(__clang__)
 #define CI18N_THREAD_LOCAL __thread
-#else
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 #define CI18N_THREAD_LOCAL _Thread_local
+#else
+#error "CI18N_THREAD_LOCAL_CONTEXT requires a compiler with thread-local storage"
 #endif
 static CI18N_THREAD_LOCAL ci18n_context_t ci18n_ctx;
 #else
@@ -728,24 +817,26 @@ CI18N_DEF const char *ci18n_get_current(void)
     return ci18n_ctx.current_language;
 }
 
-CI18N_DEF const char **ci18n_get_languages(size_t *count)
+CI18N_DEF size_t ci18n_get_languages(const char **out, size_t capacity)
 {
-    static const char *codes[CI18N_MAX_LANGUAGES];
     size_t i;
+    size_t n;
 
-    if (!count)
+    if (!ci18n_ctx.initialized)
     {
-        return NULL;
+        return 0;
     }
 
-    *count = ci18n_ctx.language_count;
-
-    for (i = 0; i < ci18n_ctx.language_count; i++)
+    if (out)
     {
-        codes[i] = ci18n_ctx.languages[i].code;
+        n = capacity < ci18n_ctx.language_count ? capacity : ci18n_ctx.language_count;
+        for (i = 0; i < n; i++)
+        {
+            out[i] = ci18n_ctx.languages[i].code;
+        }
     }
 
-    return codes;
+    return ci18n_ctx.language_count;
 }
 
 CI18N_DEF bool ci18n_set(const char *language_code, const char *key, const char *value)
@@ -878,7 +969,7 @@ CI18N_DEF bool ci18n_is_initialized(void)
     return ci18n_ctx.initialized;
 }
 
-#ifdef CI18N_THREAD_SAFE
+#ifdef CI18N_THREAD_LOCAL_CONTEXT
 CI18N_DEF ci18n_context_t *ci18n_get_context(void)
 {
     return &ci18n_ctx;

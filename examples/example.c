@@ -62,11 +62,13 @@ int main(void) {
     printf("\n=== Dynamic ===\n");
     printf("%s\n", ci18n_get_or_key("dynamic_key"));
 
-    size_t count;
-    const char **langs = ci18n_get_languages(&count);
-    printf("\n=== Available languages (%u) ===\n", (unsigned int)count);
-    for (size_t i = 0; i < count; i++) {
-        printf("  - %s\n", langs[i]);
+    /* You own the buffer. Sizing it to CI18N_MAX_LANGUAGES means the return
+     * value can never exceed it, so no clamping is needed here. */
+    const char *codes[CI18N_MAX_LANGUAGES];
+    size_t total = ci18n_get_languages(codes, CI18N_MAX_LANGUAGES);
+    printf("\n=== Available languages (%u) ===\n", (unsigned int)total);
+    for (size_t i = 0; i < total; i++) {
+        printf("  - %s\n", codes[i]);
     }
 
     /* Releases every language buffer and resets the context. */

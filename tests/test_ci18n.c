@@ -304,26 +304,65 @@ TEST(test_get_languages)
     ci18n_set("ru", "k", "v");
     ci18n_set("es", "k", "v");
 
-    size_t count;
-    const char **langs = ci18n_get_languages(&count);
+    const char *codes[CI18N_MAX_LANGUAGES];
+    size_t total = ci18n_get_languages(codes, CI18N_MAX_LANGUAGES);
 
-    ASSERT(count == 3);
+    ASSERT(total == 3);
 
     /* Check all languages are present (order may vary) */
     int found_en = 0, found_ru = 0, found_es = 0;
-    for (size_t i = 0; i < count; i++)
+    for (size_t i = 0; i < total; i++)
     {
-        if (strcmp(langs[i], "en") == 0)
+        if (strcmp(codes[i], "en") == 0)
             found_en = 1;
-        if (strcmp(langs[i], "ru") == 0)
+        if (strcmp(codes[i], "ru") == 0)
             found_ru = 1;
-        if (strcmp(langs[i], "es") == 0)
+        if (strcmp(codes[i], "es") == 0)
             found_es = 1;
     }
 
     ASSERT(found_en && found_ru && found_es);
 
     ci18n_free();
+}
+
+TEST(test_get_languages_count_only)
+{
+    ci18n_init();
+
+    ci18n_set("en", "k", "v");
+    ci18n_set("ru", "k", "v");
+
+    /* A NULL buffer asks for the total without writing anything. */
+    ASSERT(ci18n_get_languages(NULL, 0) == 2);
+
+    ci18n_free();
+}
+
+TEST(test_get_languages_small_buffer)
+{
+    ci18n_init();
+
+    ci18n_set("en", "k", "v");
+    ci18n_set("ru", "k", "v");
+    ci18n_set("es", "k", "v");
+
+    /* A short buffer is filled to capacity, never past it, and the return
+     * value still reports the real total. The guard entry must survive. */
+    const char *codes[3];
+    codes[2] = "guard";
+
+    ASSERT(ci18n_get_languages(codes, 2) == 3);
+    ASSERT_STR_EQ(codes[2], "guard");
+    ASSERT(codes[0] != NULL && codes[1] != NULL);
+
+    ci18n_free();
+}
+
+TEST(test_get_languages_before_init)
+{
+    /* No context yet, so nothing to report and nothing written. */
+    ASSERT(ci18n_get_languages(NULL, 0) == 0);
 }
 
 TEST(test_utf8_strings)
@@ -458,6 +497,9 @@ int main(void)
     RUN_TEST(test_clear);
     RUN_TEST(test_clear_resets_current);
     RUN_TEST(test_get_languages);
+    RUN_TEST(test_get_languages_count_only);
+    RUN_TEST(test_get_languages_small_buffer);
+    RUN_TEST(test_get_languages_before_init);
     RUN_TEST(test_utf8_strings);
     RUN_TEST(test_long_value);
     RUN_TEST(test_empty_key_rejected);
