@@ -59,6 +59,34 @@ make test EXTRA_CFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -
 Note that MinGW ships without the sanitizer runtimes, so on Windows this needs
 WSL, MSVC or a Linux box.
 
+### CMake
+
+The CMake build is the one that covers MSVC, and the only thing that checks
+the packaging actually works:
+
+```bash
+cmake -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+With a multi-config generator, Visual Studio being the usual one, both steps
+need the configuration naming: `cmake --build build --config Release` and
+`ctest --test-dir build -C Release`.
+
+Packaging is only real if something consumes it, so
+[tests/integration/](tests/integration/) holds two consumers, one against an
+install tree and one as a subproject, and CI runs both:
+
+```bash
+cmake --install build --prefix /tmp/prefix
+cmake -B build-find -S tests/integration/find_package -DCMAKE_PREFIX_PATH=/tmp/prefix
+cmake --build build-find && ctest --test-dir build-find
+
+cmake -B build-sub -S tests/integration/subproject
+cmake --build build-sub && ctest --test-dir build-sub
+```
+
 ### Fuzzing
 
 The parser takes bytes the program did not write, so it is fuzzed as well as

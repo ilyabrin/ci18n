@@ -238,6 +238,62 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_error_string(err)`                | Код ошибки текстом   |
 | `ci18n_last_load_stats()`                | Что сделала загрузка   |
 
+## Установка
+
+Три способа, примерно в порядке возрастания требований к вашему проекту.
+
+### Скопировать заголовок
+
+Возьмите [include/ci18n.h](include/ci18n.h) и положите в свой проект. Больше
+ничего не нужно: ни библиотеки для линковки, ни шага сборки. Ради этого
+single-header библиотеки и существуют, и это вполне уважаемый выбор.
+
+### CMake
+
+Как зависимость, скачиваемая на этапе конфигурации:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(ci18n
+  GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
+  GIT_TAG v1.0.0)
+FetchContent_MakeAvailable(ci18n)
+
+target_link_libraries(your_target PRIVATE ci18n::ci18n)
+```
+
+Либо против установленной копии:
+
+```bash
+cmake -B build
+cmake --build build
+cmake --install build --prefix /usr/local
+```
+
+```cmake
+find_package(ci18n 1.0 REQUIRED)
+target_link_libraries(your_target PRIVATE ci18n::ci18n)
+```
+
+`ci18n::ci18n` это INTERFACE-таргет: он несёт путь к заголовкам и требование C99,
+а линкует ничего. Как подпроект он не собирает ни тесты, ни пример и не
+добавляет правил установки.
+
+### make
+
+```bash
+make install                       # в /usr/local
+make install PREFIX=$HOME/.local
+make install DESTDIR=/tmp/stage    # staging для сборки пакета
+make uninstall
+```
+
+Устанавливается заголовок и файл pkg-config, тот же самый, что ставит и CMake:
+
+```bash
+cc $(pkg-config --cflags ci18n) -o app app.c
+```
+
 ## Сборка
 
 ```bash

@@ -26,7 +26,7 @@ jobs:
             compiler: clang
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -61,7 +61,7 @@ jobs:
         std: [c99, c11, c17]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc clang make
@@ -85,7 +85,7 @@ jobs:
         compiler: [gcc, clang]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -108,6 +108,96 @@ jobs:
           make clean
           make CC=${{ matrix.compiler }}
 
+  # Packaging is only real if something consumes it, so this installs the
+  # library and builds a consumer against the install tree, then again as a
+  # subproject, which is the path FetchContent takes.
+  #
+  # This is also the only job that reaches MSVC: cmake is how you would build
+  # with it, and the header turns out to need nothing special there beyond the
+  # usual C4996 deprecation notes for fopen.
+  cmake:
+    name: cmake / ${{ matrix.os }} / ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+          - os: ubuntu-latest
+            compiler: clang
+          - os: macos-latest
+            compiler: clang
+          - os: windows-latest
+            compiler: msvc
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc clang cmake
+
+      # MSVC picks itself up from the default generator, so the compiler is
+      # only pinned where a choice exists.
+      - name: Configure
+        run: |
+          if [ "${{ matrix.compiler }}" = "msvc" ]; then
+            cmake -B build
+          else
+            cmake -B build -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          fi
+        shell: bash
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      # Multi-config generators need the configuration naming again here.
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Install
+        run: cmake --install build --config Release --prefix "${{ runner.temp }}/prefix"
+
+      - name: Consume the installed package
+        run: |
+          cmake -B build-find -S tests/integration/find_package \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/prefix"
+          cmake --build build-find --config Release
+          ctest --test-dir build-find -C Release --output-on-failure
+        shell: bash
+
+      - name: Consume it as a subproject
+        run: |
+          cmake -B build-sub -S tests/integration/subproject
+          cmake --build build-sub --config Release
+          ctest --test-dir build-sub -C Release --output-on-failure
+        shell: bash
+
+      # Both packaging routes ship the same pkg-config file, so it is worth
+      # checking that pkg-config can actually read the one cmake generated.
+      - name: Check the pkg-config file
+        if: runner.os != 'Windows'
+        run: |
+          export PKG_CONFIG_PATH="${{ runner.temp }}/prefix/lib/pkgconfig"
+          pkg-config --exists ci18n
+          test "$(pkg-config --modversion ci18n)" = "$(sed -n 's/.*CI18N_VERSION_STRING "//p' include/ci18n.h | tr -d '"')"
+          cc $(pkg-config --cflags ci18n) -o consumer tests/integration/consumer.c
+          ./consumer
+        shell: bash
+
+      # The Makefile installs the same two files. Packagers use this route, so
+      # it gets checked as well.
+      - name: Install through the Makefile too
+        if: runner.os != 'Windows'
+        run: |
+          make install PREFIX="${{ runner.temp }}/mk-prefix"
+          test -f "${{ runner.temp }}/mk-prefix/include/ci18n.h"
+          test -f "${{ runner.temp }}/mk-prefix/lib/pkgconfig/ci18n.pc"
+          make uninstall PREFIX="${{ runner.temp }}/mk-prefix"
+          test ! -f "${{ runner.temp }}/mk-prefix/include/ci18n.h"
+        shell: bash
+
   # The parser reads bytes the program did not write, so it gets fuzzed rather
   # than only unit tested.
   fuzz:
@@ -118,7 +208,7 @@ jobs:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang make
@@ -131,9 +221,15 @@ jobs:
       - name: Replay the seed corpus without libFuzzer
         run: make clean && make fuzz-corpus CC=clang
 
-      - name: Upload findings
-        if: failure()
-        uses: actions/upload-artifact@v4
+      # Always, not only on failure. Gating this on failure meant the step ran
+      # for the first time on the day the fuzzer found something, which is the
+      # worst moment to discover the upload itself is misconfigured, and it
+      # made every dependabot bump of this action look verified when nothing
+      # had exercised it. Uploading the corpus each run also gives us the
+      # inputs libFuzzer worked out, which are worth promoting to seeds.
+      - name: Upload corpus and any findings
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-findings
           path: |
@@ -142,6 +238,7 @@ jobs:
             leak-*
             timeout-*
           if-no-files-found: ignore
+          retention-days: 14
 
   sanitizers:
     name: ${{ matrix.sanitizer }} / ${{ matrix.compiler }}
@@ -158,7 +255,7 @@ jobs:
       TSAN_OPTIONS: halt_on_error=1
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc clang make

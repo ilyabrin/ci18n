@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+
+# ci18n is header only, so there is nothing to find beyond the exported
+# interface target and nothing to link.
+include("${CMAKE_CURRENT_LIST_DIR}/ci18nTargets.cmake")
+
+check_required_components(ci18n)

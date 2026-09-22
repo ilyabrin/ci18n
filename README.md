@@ -236,6 +236,63 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_error_string(err)`                | Error code as text    |
 | `ci18n_last_load_stats()`                | What the last load did |
 
+## Installing
+
+Three ways in, in rough order of how little they ask of you.
+
+### Vendor the header
+
+Copy [include/ci18n.h](include/ci18n.h) into your project. There is nothing
+else to it: no library to link, no build step. This is the point of a single
+header, and it is a perfectly respectable choice.
+
+### CMake
+
+As a dependency fetched at configure time:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(ci18n
+  GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
+  GIT_TAG v1.0.0)
+FetchContent_MakeAvailable(ci18n)
+
+target_link_libraries(your_target PRIVATE ci18n::ci18n)
+```
+
+Or against an installed copy:
+
+```bash
+cmake -B build
+cmake --build build
+cmake --install build --prefix /usr/local
+```
+
+```cmake
+find_package(ci18n 1.0 REQUIRED)
+target_link_libraries(your_target PRIVATE ci18n::ci18n)
+```
+
+`ci18n::ci18n` is an INTERFACE target: it carries the include path and requires
+C99, and links nothing. As a subproject it builds no tests and no example, and
+adds no install rules.
+
+### make
+
+```bash
+make install                       # into /usr/local
+make install PREFIX=$HOME/.local
+make install DESTDIR=/tmp/stage    # staging root for a package build
+make uninstall
+```
+
+This installs the header and a pkg-config file, which is the same file the
+CMake route installs:
+
+```bash
+cc $(pkg-config --cflags ci18n) -o app app.c
+```
+
 ## Building
 
 ```bash

@@ -8,6 +8,15 @@
 *.a
 *.lib
 build/
+build-*/
+
+# CMake, in case someone configures in the source tree
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+ci18n.pc
+Testing/
 
 # Executables
 example

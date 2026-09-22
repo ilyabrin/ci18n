@@ -71,6 +71,38 @@ fuzz-corpus: tests/fuzz_load_buffer.c include/ci18n.h
 	$(CC) $(ALL_CFLAGS) -DCI18N_FUZZ_REPLAY -g -o fuzz_replay tests/fuzz_load_buffer.c
 	@for input in tests/fuzz_corpus/*; do ./fuzz_replay "$$input" || exit 1; done
 
+# Installation. There is nothing to compile, so this copies one header and
+# generates a pkg-config file next to it.
+#
+#   make install                     into /usr/local
+#   make install PREFIX=$HOME/.local
+#   make install DESTDIR=/tmp/stage  staging root for a package build
+PREFIX ?= /usr/local
+INCLUDEDIR ?= $(PREFIX)/include
+PKGCONFIGDIR ?= $(PREFIX)/lib/pkgconfig
+
+# One source of truth: the version comes out of the header it describes.
+#
+# Two make quirks to avoid here: a `)` in the sed script would close
+# $(shell ...) early, and a `#` would start a comment and truncate the line.
+# Hence no capture groups and no literal hash.
+CI18N_VERSION = $(shell sed -n 's/.*CI18N_VERSION_STRING "//p' include/ci18n.h | tr -d '"')
+
+.PHONY: install uninstall
+
+install: include/ci18n.h ci18n.pc.in
+	mkdir -p "$(DESTDIR)$(INCLUDEDIR)" "$(DESTDIR)$(PKGCONFIGDIR)"
+	cp include/ci18n.h "$(DESTDIR)$(INCLUDEDIR)/ci18n.h"
+	sed -e 's|@PREFIX@|$(PREFIX)|' \
+	    -e 's|@INCLUDEDIR@|$(INCLUDEDIR)|' \
+	    -e 's|@VERSION@|$(CI18N_VERSION)|' \
+	    ci18n.pc.in > "$(DESTDIR)$(PKGCONFIGDIR)/ci18n.pc"
+	@echo "installed ci18n $(CI18N_VERSION) to $(DESTDIR)$(INCLUDEDIR)"
+
+uninstall:
+	$(RM) "$(DESTDIR)$(INCLUDEDIR)/ci18n.h"
+	$(RM) "$(DESTDIR)$(PKGCONFIGDIR)/ci18n.pc"
+
 # $(RM) is `rm -f`, which make runs through its shell. Both name variants are
 # listed because MinGW gcc appends .exe to an extensionless -o target.
 #

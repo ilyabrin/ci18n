@@ -1,0 +1,8 @@
+prefix=@PREFIX@
+includedir=@INCLUDEDIR@
+
+Name: ci18n
+Description: Single-header internationalization library for C
+URL: https://github.com/ilyabrin/ci18n
+Version: @VERSION@
+Cflags: -I${includedir}
