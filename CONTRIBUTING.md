@@ -195,6 +195,13 @@ signature or behaviour, say so explicitly in the PR description, and bump
 `CI18N_VERSION_*` in [include/ci18n.h](include/ci18n.h) in the same change so a
 downstream compile-time version check stays meaningful.
 
+## Code of conduct
+
+Be decent. The full text is in
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and the short version is that
+reports go through a [form](https://docs.google.com/forms/d/e/1FAIpQLSfs68uXGT7UfC5t__Fr1nmCIUMRPfshtF6UM5-bzpcvk-ihHQ/viewform)
+that does not ask who you are, rather than a public issue.
+
 ## Reporting bugs
 
 Open an issue with the compiler, its version, the platform, and the shortest
