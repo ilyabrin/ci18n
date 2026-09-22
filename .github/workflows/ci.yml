@@ -72,6 +72,31 @@ jobs:
       - name: Run example
         run: ./example
 
+  # Overlaps AddressSanitizer, which already runs, but not exactly: valgrind
+  # catches uninitialised reads ASan does not, and it needs no
+  # instrumentation, so it checks the code an ordinary build produces.
+  valgrind:
+    name: valgrind
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc make valgrind
+
+      - name: Unit tests
+        run: make valgrind
+
+      # The thread tests allocate per thread, which is where a leak would
+      # otherwise hide.
+      - name: Thread-local context tests
+        run: |
+          make clean
+          make test-threads EXTRA_CFLAGS="-g -O0"
+          valgrind --error-exitcode=1 --leak-check=full \
+            --errors-for-leak-kinds=all ./test_thread_local
+
   # tools/po2ci18n.py lives outside the library, so nothing would notice it
   # rotting. This converts a sample catalogue and loads the result back, which
   # is how the escape decoding bug in 2.3.0 was found.

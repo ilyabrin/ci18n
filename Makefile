@@ -24,7 +24,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads test-shared test-po fuzz fuzz-run fuzz-replay fuzz-corpus
+.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus
 
 all: example test
 
@@ -60,6 +60,21 @@ test-po: tests/test_po_roundtrip.c tools/po2ci18n.py tests/po/sample.po include/
 	$(PYTHON) tools/po2ci18n.py tests/po/sample.po -o po_roundtrip.txt
 	$(CC) $(ALL_CFLAGS) -o test_po_roundtrip tests/test_po_roundtrip.c
 	./test_po_roundtrip po_roundtrip.txt
+
+# Runs the suite under valgrind. Mostly overlapping with AddressSanitizer,
+# which CI already runs, but not identically: valgrind sees uninitialised
+# reads that ASan does not, and needs no instrumentation, so it also checks
+# the code as an ordinary build produces it.
+#
+# Cannot be combined with a sanitizer build: valgrind and ASan both want to
+# own the allocator.
+VALGRIND ?= valgrind
+VALGRIND_FLAGS ?= --error-exitcode=1 --leak-check=full --show-leak-kinds=all \
+	--track-origins=yes --errors-for-leak-kinds=all
+
+valgrind: tests/test_ci18n.c include/ci18n.h
+	$(CC) $(ALL_CFLAGS) -g -O0 -o test_ci18n tests/test_ci18n.c
+	$(VALGRIND) $(VALGRIND_FLAGS) ./test_ci18n
 
 # Fuzzing the parser. libFuzzer ships with clang, so this uses clang whatever
 # CC is set to; override with FUZZ_CC if yours lives elsewhere.

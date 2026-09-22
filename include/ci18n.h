@@ -137,6 +137,79 @@ extern "C"
 #define CI18N_MAX_CODE_LENGTH 32
 #endif
 
+/* ============================================================================
+ * Threading primitives
+ * ============================================================================
+ *
+ * Declared up here rather than with the implementation because the lock is a
+ * field of the catalogue, so its type has to be complete where the struct is.
+ * A consumer asking for the shared mode therefore pulls in pthread.h, or
+ * windows.h on Windows, which is the price of the lock living where it
+ * belongs.
+ * ============================================================================ */
+
+#if defined(CI18N_THREAD_LOCAL_CONTEXT) && defined(CI18N_THREAD_SHARED)
+#error "CI18N_THREAD_LOCAL_CONTEXT and CI18N_THREAD_SHARED are alternatives, not a pair"
+#endif
+
+#if defined(CI18N_THREAD_LOCAL_CONTEXT) || defined(CI18N_THREAD_SHARED)
+/* Pick the storage keyword by compiler, not by OS.
+ *
+ * MinGW gcc defines _WIN32 but rejects __declspec(thread): it ignores the
+ * attribute with a warning, which silently turns the per-thread context back
+ * into one shared global. Ask the compiler what it speaks instead. */
+#if defined(_MSC_VER)
+#define CI18N_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
+#define CI18N_THREAD_LOCAL __thread
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define CI18N_THREAD_LOCAL _Thread_local
+#else
+#error "this mode requires a compiler with thread-local storage"
+#endif
+#endif
+
+/* ---------------------------------------------------------------------------
+ * The reader-writer lock for CI18N_THREAD_SHARED.
+ *
+ * It lives inside the context rather than beside the global, so that when the
+ * API grows an explicit handle the lock travels with it and each handle locks
+ * itself. Statically initialised, which also removes the question of who
+ * initialises it first: there is no window before ci18n_init().
+ * --------------------------------------------------------------------------- */
+#ifdef CI18N_THREAD_SHARED
+
+#if defined(_WIN32)
+#include <windows.h>
+typedef SRWLOCK ci18n_rwlock_t;
+#define CI18N_RWLOCK_INIT SRWLOCK_INIT
+#define ci18n_rwlock_read(l) AcquireSRWLockShared(l)
+#define ci18n_rwlock_read_unlock(l) ReleaseSRWLockShared(l)
+#define ci18n_rwlock_write(l) AcquireSRWLockExclusive(l)
+#define ci18n_rwlock_write_unlock(l) ReleaseSRWLockExclusive(l)
+#else
+
+/* glibc gates pthread_rwlock_* behind __USE_XOPEN2K, which needs
+ * _POSIX_C_SOURCE at 200112L or above. Strict ANSI mode, which -std=c99
+ * selects, does not reach it, and neither does -pthread on its own: that sets
+ * _POSIX_C_SOURCE to 199506L, so testing whether the macro is merely defined
+ * is not enough. Checking glibc's own gate is, and it turns an implicit
+ * declaration into an answer. */
+#if defined(__GLIBC__) && !defined(__USE_XOPEN2K)
+#error "CI18N_THREAD_SHARED on glibc needs -D_POSIX_C_SOURCE=200809L, or -std=gnu99 instead of -std=c99"
+#endif
+
+#include <pthread.h>
+typedef pthread_rwlock_t ci18n_rwlock_t;
+#define CI18N_RWLOCK_INIT PTHREAD_RWLOCK_INITIALIZER
+#define ci18n_rwlock_read(l) pthread_rwlock_rdlock(l)
+#define ci18n_rwlock_read_unlock(l) pthread_rwlock_unlock(l)
+#define ci18n_rwlock_write(l) pthread_rwlock_wrlock(l)
+#define ci18n_rwlock_write_unlock(l) pthread_rwlock_unlock(l)
+#endif
+
+#endif /* CI18N_THREAD_SHARED */
+
     /* ============================================================================
      * Types
      * ============================================================================ */
@@ -232,7 +305,27 @@ extern "C"
         ci18n_error_t last_error;
         ci18n_load_stats_t load_stats;
         bool initialized;
+#ifdef CI18N_THREAD_SHARED
+        /* Inside the catalogue, not beside the global, so that every
+         * catalogue locks itself. */
+        ci18n_rwlock_t lock;
+#endif
     } ci18n_context_t;
+
+    /*
+     * A catalogue: a set of languages with its own current and fallback
+     * selection.
+     *
+     * Every function has a variant taking one of these, and the plain names
+     * are those variants applied to a default catalogue. That is the whole
+     * difference, and it matters when ci18n is used inside a library: without
+     * it, the library and the application that linked it would fight over one
+     * selection, and whoever called ci18n_set_current() last would win.
+     *
+     * The struct is visible because ci18n_get_context() hands it out, not
+     * because its layout is part of the API. Use the functions.
+     */
+    typedef ci18n_context_t ci18n_t;
 
     /* ============================================================================
      * Pointer lifetime
@@ -732,75 +825,21 @@ extern "C"
 #include <string.h>
 #include <stdarg.h>
 
-/* Needed for GetUserDefaultLocaleName(), and for SRWLOCK in the shared
- * threading mode. CI18N_NO_PLATFORM_LOCALE drops the locale lookup, but the
- * lock still needs the header when that mode is on. */
-#if defined(_WIN32) && (!defined(CI18N_NO_PLATFORM_LOCALE) || defined(CI18N_THREAD_SHARED))
+/* Needed for GetUserDefaultLocaleName(). The shared threading mode needs
+ * windows.h too, and pulls it in earlier, next to the lock it declares. */
+#if defined(_WIN32) && !defined(CI18N_NO_PLATFORM_LOCALE)
 #include <windows.h>
 #endif
 
-#if defined(CI18N_THREAD_LOCAL_CONTEXT) && defined(CI18N_THREAD_SHARED)
-#error "CI18N_THREAD_LOCAL_CONTEXT and CI18N_THREAD_SHARED are alternatives, not a pair"
-#endif
-
-#if defined(CI18N_THREAD_LOCAL_CONTEXT) || defined(CI18N_THREAD_SHARED)
-/* Pick the storage keyword by compiler, not by OS.
- *
- * MinGW gcc defines _WIN32 but rejects __declspec(thread): it ignores the
- * attribute with a warning, which silently turns the per-thread context back
- * into one shared global. Ask the compiler what it speaks instead. */
-#if defined(_MSC_VER)
-#define CI18N_THREAD_LOCAL __declspec(thread)
-#elif defined(__GNUC__) || defined(__clang__)
-#define CI18N_THREAD_LOCAL __thread
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-#define CI18N_THREAD_LOCAL _Thread_local
-#else
-#error "this mode requires a compiler with thread-local storage"
-#endif
-#endif
-
-/* ---------------------------------------------------------------------------
- * The reader-writer lock for CI18N_THREAD_SHARED.
- *
- * It lives inside the context rather than beside the global, so that when the
- * API grows an explicit handle the lock travels with it and each handle locks
- * itself. Statically initialised, which also removes the question of who
- * initialises it first: there is no window before ci18n_init().
- * --------------------------------------------------------------------------- */
+/* The lock type and its operations are declared with the public types, since
+ * the lock is a field of the catalogue. What belongs here is how the library
+ * uses them, and the storage for the default catalogue. */
 #ifdef CI18N_THREAD_SHARED
 
-#if defined(_WIN32)
-typedef SRWLOCK ci18n_rwlock_t;
-#define CI18N_RWLOCK_INIT SRWLOCK_INIT
-#define ci18n_rwlock_read(l) AcquireSRWLockShared(l)
-#define ci18n_rwlock_read_unlock(l) ReleaseSRWLockShared(l)
-#define ci18n_rwlock_write(l) AcquireSRWLockExclusive(l)
-#define ci18n_rwlock_write_unlock(l) ReleaseSRWLockExclusive(l)
-#else
-
-/* glibc hides the POSIX threading declarations in strict ANSI mode, which is
- * what -std=c99 selects, so pthread_rwlock_* would arrive as implicit
- * declarations and fail confusingly. Say what to do instead. */
-#if defined(__GLIBC__) && defined(__STRICT_ANSI__) &&     !defined(_POSIX_C_SOURCE) && !defined(_GNU_SOURCE) && !defined(_XOPEN_SOURCE)
-#error "CI18N_THREAD_SHARED on glibc needs -D_POSIX_C_SOURCE=200809L, or -std=gnu99 instead of -std=c99"
-#endif
-
-#include <pthread.h>
-typedef pthread_rwlock_t ci18n_rwlock_t;
-#define CI18N_RWLOCK_INIT PTHREAD_RWLOCK_INITIALIZER
-#define ci18n_rwlock_read(l) pthread_rwlock_rdlock(l)
-#define ci18n_rwlock_read_unlock(l) pthread_rwlock_unlock(l)
-#define ci18n_rwlock_write(l) pthread_rwlock_wrlock(l)
-#define ci18n_rwlock_write_unlock(l) pthread_rwlock_unlock(l)
-#endif
-
-static ci18n_rwlock_t ci18n_lock = CI18N_RWLOCK_INIT;
-
-#define CI18N_READ_LOCK() ci18n_rwlock_read(&ci18n_lock)
-#define CI18N_READ_UNLOCK() ci18n_rwlock_read_unlock(&ci18n_lock)
-#define CI18N_WRITE_LOCK() ci18n_rwlock_write(&ci18n_lock)
-#define CI18N_WRITE_UNLOCK() ci18n_rwlock_write_unlock(&ci18n_lock)
+#define CI18N_READ_LOCK(c) ci18n_rwlock_read(&(c)->lock)
+#define CI18N_READ_UNLOCK(c) ci18n_rwlock_read_unlock(&(c)->lock)
+#define CI18N_WRITE_LOCK(c) ci18n_rwlock_write(&(c)->lock)
+#define CI18N_WRITE_UNLOCK(c) ci18n_rwlock_write_unlock(&(c)->lock)
 
 /*
  * Diagnostics are per-thread even though the data is shared: an error code
@@ -810,20 +849,24 @@ static ci18n_rwlock_t ci18n_lock = CI18N_RWLOCK_INIT;
 static CI18N_THREAD_LOCAL ci18n_error_t ci18n_tls_error;
 static CI18N_THREAD_LOCAL ci18n_load_stats_t ci18n_tls_stats;
 
-#define CI18N_ERROR_SLOT ci18n_tls_error
-#define CI18N_STATS_SLOT ci18n_tls_stats
+/* The slot is thread-local here, so the catalogue is irrelevant. It is still
+ * consumed, through a comma expression that yields an lvalue, so that helpers
+ * taking a catalogue they do not otherwise need are not left with an unused
+ * parameter in this mode alone. */
+#define CI18N_ERROR_SLOT(c) (*((void)(c), &ci18n_tls_error))
+#define CI18N_STATS_SLOT(c) (*((void)(c), &ci18n_tls_stats))
 
 static ci18n_context_t ci18n_ctx;
 
 #else /* not CI18N_THREAD_SHARED */
 
-#define CI18N_READ_LOCK() ((void)0)
-#define CI18N_READ_UNLOCK() ((void)0)
-#define CI18N_WRITE_LOCK() ((void)0)
-#define CI18N_WRITE_UNLOCK() ((void)0)
+#define CI18N_READ_LOCK(c) ((void)0)
+#define CI18N_READ_UNLOCK(c) ((void)0)
+#define CI18N_WRITE_LOCK(c) ((void)0)
+#define CI18N_WRITE_UNLOCK(c) ((void)0)
 
-#define CI18N_ERROR_SLOT ci18n_ctx.last_error
-#define CI18N_STATS_SLOT ci18n_ctx.load_stats
+#define CI18N_ERROR_SLOT(c) (c)->last_error
+#define CI18N_STATS_SLOT(c) (c)->load_stats
 
 #ifdef CI18N_THREAD_LOCAL_CONTEXT
 static CI18N_THREAD_LOCAL ci18n_context_t ci18n_ctx;
@@ -865,16 +908,16 @@ static void ci18n_copy(char *dst, size_t cap, const char *src)
 }
 
 /* Record a failure and return false, so callers stay one line per check */
-static bool ci18n_fail(ci18n_error_t error)
+static bool ci18n_fail(ci18n_t *ctx, ci18n_error_t error)
 {
-    CI18N_ERROR_SLOT = error;
+    CI18N_ERROR_SLOT(ctx) = error;
     return false;
 }
 
 /* Record success */
-static void ci18n_succeed(void)
+static void ci18n_succeed(ci18n_t *ctx)
 {
-    CI18N_ERROR_SLOT = CI18N_OK;
+    CI18N_ERROR_SLOT(ctx) = CI18N_OK;
 }
 
 /*
@@ -913,7 +956,7 @@ static uint32_t ci18n_hash(const char *key, size_t len)
 }
 
 /* Make room for `need` more bytes in the arena, doubling as it grows. */
-static bool ci18n_arena_reserve(ci18n_arena_t *arena, size_t need)
+static bool ci18n_arena_reserve(ci18n_t *ctx, ci18n_arena_t *arena, size_t need)
 {
     size_t capacity = arena->capacity;
     char *data;
@@ -936,7 +979,7 @@ static bool ci18n_arena_reserve(ci18n_arena_t *arena, size_t need)
     data = (char *)realloc(arena->data, capacity);
     if (!data)
     {
-        return ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
+        return ci18n_fail(ctx, CI18N_ERR_OUT_OF_MEMORY);
     }
 
     arena->data = data;
@@ -951,10 +994,10 @@ static bool ci18n_arena_reserve(ci18n_arena_t *arena, size_t need)
  * nothing: a realloc moves every string at once and no stored reference has
  * to be corrected.
  */
-static bool ci18n_arena_add(ci18n_arena_t *arena, const char *text, size_t len,
+static bool ci18n_arena_add(ci18n_t *ctx, ci18n_arena_t *arena, const char *text, size_t len,
                             uint32_t *out_offset)
 {
-    if (!ci18n_arena_reserve(arena, len + 1))
+    if (!ci18n_arena_reserve(ctx, arena, len + 1))
     {
         return false;
     }
@@ -1049,14 +1092,14 @@ static size_t ci18n_unescaped_length(const char *text, size_t len)
  * where the bytes are going anyway, and a translation line has no business
  * needing a second copy of itself.
  */
-static bool ci18n_arena_add_unescaped(ci18n_arena_t *arena, const char *text, size_t len,
+static bool ci18n_arena_add_unescaped(ci18n_t *ctx, ci18n_arena_t *arena, const char *text, size_t len,
                                       uint32_t *out_offset)
 {
     size_t decoded_len = ci18n_unescaped_length(text, len);
     size_t i = 0;
     size_t out;
 
-    if (!ci18n_arena_reserve(arena, decoded_len + 1))
+    if (!ci18n_arena_reserve(ctx, arena, decoded_len + 1))
     {
         return false;
     }
@@ -1110,7 +1153,7 @@ static void ci18n_rebuild_buckets(ci18n_language_t *lang)
  * Kept at or below a load factor of 0.75, which keeps chains at a couple of
  * entries. Bucket counts are powers of two so the modulo is a mask.
  */
-static bool ci18n_ensure_buckets(ci18n_language_t *lang, size_t wanted)
+static bool ci18n_ensure_buckets(ci18n_t *ctx, ci18n_language_t *lang, size_t wanted)
 {
     size_t bucket_count = lang->bucket_count;
     uint32_t *buckets;
@@ -1133,7 +1176,7 @@ static bool ci18n_ensure_buckets(ci18n_language_t *lang, size_t wanted)
     buckets = (uint32_t *)realloc(lang->buckets, sizeof(uint32_t) * bucket_count);
     if (!buckets)
     {
-        return ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
+        return ci18n_fail(ctx, CI18N_ERR_OUT_OF_MEMORY);
     }
 
     lang->buckets = buckets;
@@ -1143,7 +1186,7 @@ static bool ci18n_ensure_buckets(ci18n_language_t *lang, size_t wanted)
 }
 
 /* Make room for one more entry, doubling as it grows. */
-static bool ci18n_ensure_capacity(ci18n_language_t *lang)
+static bool ci18n_ensure_capacity(ci18n_t *ctx, ci18n_language_t *lang)
 {
     size_t capacity = lang->capacity;
     ci18n_entry_t *entries;
@@ -1155,7 +1198,7 @@ static bool ci18n_ensure_capacity(ci18n_language_t *lang)
 
     if (lang->count >= CI18N_MAX_KEYS_PER_LANGUAGE)
     {
-        return ci18n_fail(CI18N_ERR_TOO_MANY_KEYS);
+        return ci18n_fail(ctx, CI18N_ERR_TOO_MANY_KEYS);
     }
 
     capacity = capacity == 0 ? 8 : capacity * 2;
@@ -1167,7 +1210,7 @@ static bool ci18n_ensure_capacity(ci18n_language_t *lang)
     entries = (ci18n_entry_t *)realloc(lang->entries, sizeof(ci18n_entry_t) * capacity);
     if (!entries)
     {
-        return ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
+        return ci18n_fail(ctx, CI18N_ERR_OUT_OF_MEMORY);
     }
 
     lang->entries = entries;
@@ -1229,7 +1272,7 @@ static int ci18n_find_entry(ci18n_language_t *lang, const char *key)
  * value is appended and the old bytes stay in the arena as dead weight until
  * the language is cleared.
  */
-static bool ci18n_lang_set_ex(ci18n_language_t *lang,
+static bool ci18n_lang_set_ex(ci18n_t *ctx, ci18n_language_t *lang,
                               const char *key, size_t key_len,
                               const char *value, size_t value_len,
                               bool unescape)
@@ -1256,7 +1299,7 @@ static bool ci18n_lang_set_ex(ci18n_language_t *lang,
             decoded_len = sizeof(decoded_key) - 1;
         }
 
-        if (!ci18n_arena_add_unescaped(&lang->strings, key, key_len, &offset))
+        if (!ci18n_arena_add_unescaped(ctx, &lang->strings, key, key_len, &offset))
         {
             return false;
         }
@@ -1294,7 +1337,7 @@ static bool ci18n_lang_set_ex(ci18n_language_t *lang,
                 /* Decode into the existing slot by decoding to the arena tail
                  * and moving it back, which keeps one implementation of the
                  * escape rules rather than two. */
-                if (!ci18n_arena_add_unescaped(&lang->strings, value, value_len, &offset))
+                if (!ci18n_arena_add_unescaped(ctx, &lang->strings, value, value_len, &offset))
                 {
                     return false;
                 }
@@ -1314,12 +1357,12 @@ static bool ci18n_lang_set_ex(ci18n_language_t *lang,
 
         if (unescape)
         {
-            if (!ci18n_arena_add_unescaped(&lang->strings, value, value_len, &value_offset))
+            if (!ci18n_arena_add_unescaped(ctx, &lang->strings, value, value_len, &value_offset))
             {
                 return false;
             }
         }
-        else if (!ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
+        else if (!ci18n_arena_add(ctx, &lang->strings, value, value_len, &value_offset))
         {
             return false;
         }
@@ -1330,36 +1373,36 @@ static bool ci18n_lang_set_ex(ci18n_language_t *lang,
         return true;
     }
 
-    if (!ci18n_ensure_capacity(lang))
+    if (!ci18n_ensure_capacity(ctx, lang))
     {
         return false;
     }
 
-    if (!ci18n_ensure_buckets(lang, lang->count + 1))
+    if (!ci18n_ensure_buckets(ctx, lang, lang->count + 1))
     {
         return false;
     }
 
     if (unescape_key)
     {
-        if (!ci18n_arena_add_unescaped(&lang->strings, key, key_len, &key_offset))
+        if (!ci18n_arena_add_unescaped(ctx, &lang->strings, key, key_len, &key_offset))
         {
             return false;
         }
     }
-    else if (!ci18n_arena_add(&lang->strings, key, key_len, &key_offset))
+    else if (!ci18n_arena_add(ctx, &lang->strings, key, key_len, &key_offset))
     {
         return false;
     }
 
     if (unescape)
     {
-        if (!ci18n_arena_add_unescaped(&lang->strings, value, value_len, &value_offset))
+        if (!ci18n_arena_add_unescaped(ctx, &lang->strings, value, value_len, &value_offset))
         {
             return false;
         }
     }
-    else if (!ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
+    else if (!ci18n_arena_add(ctx, &lang->strings, value, value_len, &value_offset))
     {
         return false;
     }
@@ -1378,11 +1421,11 @@ static bool ci18n_lang_set_ex(ci18n_language_t *lang,
 
 /* Programmatic values arrive already unescaped by the C compiler, so this
  * path stores them verbatim. Only the file and buffer parsers decode. */
-static bool ci18n_lang_set(ci18n_language_t *lang,
+static bool ci18n_lang_set(ci18n_t *ctx, ci18n_language_t *lang,
                            const char *key, size_t key_len,
                            const char *value, size_t value_len)
 {
-    return ci18n_lang_set_ex(lang, key, key_len, value, value_len, false);
+    return ci18n_lang_set_ex(ctx, lang, key, key_len, value, value_len, false);
 }
 
 /* Release everything one language holds. */
@@ -1395,12 +1438,12 @@ static void ci18n_lang_release(ci18n_language_t *lang)
 }
 
 /* Find language by code, returns index or -1 if not found */
-static int ci18n_find_language(const char *code)
+static int ci18n_find_language(ci18n_t *ctx, const char *code)
 {
     size_t i;
-    for (i = 0; i < ci18n_ctx.language_count; i++)
+    for (i = 0; i < ctx->language_count; i++)
     {
-        if (strcmp(ci18n_ctx.languages[i].code, code) == 0)
+        if (strcmp(ctx->languages[i].code, code) == 0)
         {
             return (int)i;
         }
@@ -1416,26 +1459,26 @@ static int ci18n_find_language(const char *code)
  * matters on a device where the old fixed layout claimed 272 KB before
  * storing a single translation.
  */
-static ci18n_language_t *ci18n_get_or_create_language(const char *code)
+static ci18n_language_t *ci18n_get_or_create_language(ci18n_t *ctx, const char *code)
 {
-    int idx = ci18n_find_language(code);
+    int idx = ci18n_find_language(ctx, code);
     ci18n_language_t *lang;
 
     if (idx >= 0)
     {
-        return &ci18n_ctx.languages[idx];
+        return &ctx->languages[idx];
     }
 
-    if (ci18n_ctx.language_count >= CI18N_MAX_LANGUAGES)
+    if (ctx->language_count >= CI18N_MAX_LANGUAGES)
     {
-        ci18n_fail(CI18N_ERR_TOO_MANY_LANGUAGES);
+        ci18n_fail(ctx, CI18N_ERR_TOO_MANY_LANGUAGES);
         return NULL;
     }
 
-    lang = &ci18n_ctx.languages[ci18n_ctx.language_count];
+    lang = &ctx->languages[ctx->language_count];
     memset(lang, 0, sizeof(ci18n_language_t));
     ci18n_copy(lang->code, sizeof(lang->code), code);
-    ci18n_ctx.language_count++;
+    ctx->language_count++;
 
     return lang;
 }
@@ -1485,7 +1528,7 @@ static void ci18n_trim_slice(const char **text, size_t *len)
  * stack for every line, which is a lot to ask of a small device for a parser
  * that never needed either.
  */
-static ci18n_line_result_t ci18n_parse_line(ci18n_language_t *lang, const char *line)
+static ci18n_line_result_t ci18n_parse_line(ci18n_t *ctx, ci18n_language_t *lang, const char *line)
 {
     const char *eq;
     const char *key;
@@ -1559,16 +1602,16 @@ static ci18n_line_result_t ci18n_parse_line(ci18n_language_t *lang, const char *
     if (key_len > CI18N_MAX_KEY_LENGTH - 1)
     {
         key_len = CI18N_MAX_KEY_LENGTH - 1;
-        CI18N_STATS_SLOT.keys_truncated++;
+        CI18N_STATS_SLOT(ctx).keys_truncated++;
     }
 
     if (value_len > CI18N_MAX_VALUE_LENGTH - 1)
     {
         value_len = CI18N_MAX_VALUE_LENGTH - 1;
-        CI18N_STATS_SLOT.values_truncated++;
+        CI18N_STATS_SLOT(ctx).values_truncated++;
     }
 
-    if (!ci18n_lang_set_ex(lang, key, key_len, value, value_len, true))
+    if (!ci18n_lang_set_ex(ctx, lang, key, key_len, value, value_len, true))
     {
         return CI18N_LINE_FAILED;
     }
@@ -1577,35 +1620,35 @@ static ci18n_line_result_t ci18n_parse_line(ci18n_language_t *lang, const char *
 }
 
 /* Fold one line's outcome into the stats of the load in progress */
-static void ci18n_record_line(ci18n_line_result_t result, size_t line_number)
+static void ci18n_record_line(ci18n_t *ctx, ci18n_line_result_t result, size_t line_number)
 {
-    CI18N_STATS_SLOT.lines_read++;
+    CI18N_STATS_SLOT(ctx).lines_read++;
 
     switch (result)
     {
     case CI18N_LINE_LOADED:
-        CI18N_STATS_SLOT.entries_loaded++;
+        CI18N_STATS_SLOT(ctx).entries_loaded++;
         break;
 
     case CI18N_LINE_SKIPPED:
-        CI18N_STATS_SLOT.lines_skipped++;
+        CI18N_STATS_SLOT(ctx).lines_skipped++;
         break;
 
     case CI18N_LINE_MALFORMED:
     case CI18N_LINE_FAILED:
-        CI18N_STATS_SLOT.lines_malformed++;
-        if (CI18N_STATS_SLOT.first_malformed_line == 0)
+        CI18N_STATS_SLOT(ctx).lines_malformed++;
+        if (CI18N_STATS_SLOT(ctx).first_malformed_line == 0)
         {
-            CI18N_STATS_SLOT.first_malformed_line = line_number;
+            CI18N_STATS_SLOT(ctx).first_malformed_line = line_number;
         }
         break;
     }
 }
 
 /* Start a load with a clean slate of statistics */
-static void ci18n_reset_load_stats(void)
+static void ci18n_reset_load_stats(ci18n_t *ctx)
 {
-    memset(&CI18N_STATS_SLOT, 0, sizeof(CI18N_STATS_SLOT));
+    memset(&CI18N_STATS_SLOT(ctx), 0, sizeof(CI18N_STATS_SLOT(ctx)));
 }
 
 /*
@@ -1613,112 +1656,130 @@ static void ci18n_reset_load_stats(void)
  * garbage still returns true; anything dropped or truncated is reported
  * through the error code and the stats instead.
  */
-static bool ci18n_finish_load(void)
+static bool ci18n_finish_load(ci18n_t *ctx)
 {
-    const ci18n_load_stats_t *st = &CI18N_STATS_SLOT;
+    const ci18n_load_stats_t *st = &CI18N_STATS_SLOT(ctx);
 
     if (st->lines_malformed > 0 || st->keys_truncated > 0 ||
         st->values_truncated > 0 || st->lines_truncated > 0)
     {
-        CI18N_ERROR_SLOT = CI18N_ERR_PARSE;
+        CI18N_ERROR_SLOT(ctx) = CI18N_ERR_PARSE;
     }
     else
     {
-        ci18n_succeed();
+        ci18n_succeed(ctx);
     }
 
     return true;
+}
+
+/*
+ * Clear a catalogue's data, field by field.
+ *
+ * Not a memset over the whole struct, for two reasons. The lock is a field
+ * now, and zeroing it while it is held is undefined; and a memset of the
+ * global would be wrong the moment there is more than one catalogue.
+ */
+static void ci18n_reset_data(ci18n_t *ctx)
+{
+    memset(ctx->languages, 0, sizeof(ctx->languages));
+    ctx->language_count = 0;
+    ctx->current_language[0] = 0;
+    ctx->fallback_language[0] = 0;
+    ctx->last_error = CI18N_OK;
+    memset(&ctx->load_stats, 0, sizeof(ctx->load_stats));
+    ctx->initialized = false;
 }
 
 /* ============================================================================
  * Public API Implementation
  * ============================================================================ */
 
-static bool ci18n_init_impl(void)
+static bool ci18n_init_impl(ci18n_t *ctx)
 {
-    if (ci18n_ctx.initialized)
+    if (ctx->initialized)
     {
         return true;
     }
 
-    memset(&ci18n_ctx, 0, sizeof(ci18n_context_t));
-    ci18n_ctx.initialized = true;
+    ci18n_reset_data(ctx);
+    ctx->initialized = true;
     return true;
 }
 CI18N_DEF bool ci18n_init(void)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_init_impl();
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_init_impl(&ci18n_ctx);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static void ci18n_free_impl(void)
+static void ci18n_free_impl(ci18n_t *ctx)
 {
     size_t i;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
         return;
     }
 
-    for (i = 0; i < ci18n_ctx.language_count; i++)
+    for (i = 0; i < ctx->language_count; i++)
     {
-        ci18n_lang_release(&ci18n_ctx.languages[i]);
+        ci18n_lang_release(&ctx->languages[i]);
     }
 
-    memset(&ci18n_ctx, 0, sizeof(ci18n_context_t));
+    ci18n_reset_data(ctx);
 }
 CI18N_DEF void ci18n_free(void)
 {
-    CI18N_WRITE_LOCK();
-    ci18n_free_impl();
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    ci18n_free_impl(&ci18n_ctx);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 }
 
 
-static bool ci18n_load_language_impl(const char *language_code, const char *filepath)
+static bool ci18n_load_language_impl(ci18n_t *ctx, const char *language_code, const char *filepath)
 {
     FILE *file;
     char line[CI18N_MAX_LINE_LENGTH];
     ci18n_language_t *lang;
     size_t line_number = 0;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
     }
 
     if (!language_code || !filepath)
     {
-        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
     }
 
     if (!ci18n_code_fits(language_code))
     {
-        return ci18n_fail(CI18N_ERR_CODE_TOO_LONG);
+        return ci18n_fail(ctx, CI18N_ERR_CODE_TOO_LONG);
     }
 
     file = fopen(filepath, "r");
     if (!file)
     {
-        return ci18n_fail(CI18N_ERR_FILE_NOT_FOUND);
+        return ci18n_fail(ctx, CI18N_ERR_FILE_NOT_FOUND);
     }
 
     /* Created only after the file opened, so a missing file leaves no empty
      * language behind. */
-    lang = ci18n_get_or_create_language(language_code);
+    lang = ci18n_get_or_create_language(ctx, language_code);
     if (!lang)
     {
         fclose(file);
         return false; /* get_or_create already recorded why */
     }
 
-    ci18n_reset_load_stats();
+    ci18n_reset_load_stats(ctx);
 
     while (fgets(line, sizeof(line), file))
     {
@@ -1734,7 +1795,7 @@ static bool ci18n_load_language_impl(const char *language_code, const char *file
         {
             int discarded;
 
-            CI18N_STATS_SLOT.lines_truncated++;
+            CI18N_STATS_SLOT(ctx).lines_truncated++;
 
             while ((discarded = fgetc(file)) != EOF && discarded != '\n')
             {
@@ -1749,25 +1810,25 @@ static bool ci18n_load_language_impl(const char *language_code, const char *file
             line[--len] = '\0';
         }
 
-        ci18n_record_line(ci18n_parse_line(lang, line), line_number);
+        ci18n_record_line(ctx, ci18n_parse_line(ctx, lang, line), line_number);
     }
 
     fclose(file);
-    return ci18n_finish_load();
+    return ci18n_finish_load(ctx);
 }
 CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepath)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_load_language_impl(language_code, filepath);
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_load_language_impl(&ci18n_ctx, language_code, filepath);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static bool ci18n_load_from_buffer_impl(const char *language_code, const char *buffer, size_t length)
+static bool ci18n_load_from_buffer_impl(ci18n_t *ctx, const char *language_code, const char *buffer, size_t length)
 {
     ci18n_language_t *lang;
     char line[CI18N_MAX_LINE_LENGTH];
@@ -1776,28 +1837,28 @@ static bool ci18n_load_from_buffer_impl(const char *language_code, const char *b
     size_t line_number = 0;
     bool line_cut = false;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
     }
 
     if (!language_code || !buffer)
     {
-        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
     }
 
     if (!ci18n_code_fits(language_code))
     {
-        return ci18n_fail(CI18N_ERR_CODE_TOO_LONG);
+        return ci18n_fail(ctx, CI18N_ERR_CODE_TOO_LONG);
     }
 
-    lang = ci18n_get_or_create_language(language_code);
+    lang = ci18n_get_or_create_language(ctx, language_code);
     if (!lang)
     {
         return false; /* get_or_create already recorded why */
     }
 
-    ci18n_reset_load_stats();
+    ci18n_reset_load_stats(ctx);
 
     while (pos < length)
     {
@@ -1807,7 +1868,7 @@ static bool ci18n_load_from_buffer_impl(const char *language_code, const char *b
         {
             line[line_pos] = '\0';
             line_number++;
-            ci18n_record_line(ci18n_parse_line(lang, line), line_number);
+            ci18n_record_line(ctx, ci18n_parse_line(ctx, lang, line), line_number);
             line_pos = 0;
             line_cut = false;
 
@@ -1827,7 +1888,7 @@ static bool ci18n_load_from_buffer_impl(const char *language_code, const char *b
             {
                 /* Everything past the buffer is dropped, unlike the file
                  * loader where the tail resurfaces as another line. */
-                CI18N_STATS_SLOT.lines_truncated++;
+                CI18N_STATS_SLOT(ctx).lines_truncated++;
                 line_cut = true;
             }
         }
@@ -1838,180 +1899,180 @@ static bool ci18n_load_from_buffer_impl(const char *language_code, const char *b
     {
         line[line_pos] = '\0';
         line_number++;
-        ci18n_record_line(ci18n_parse_line(lang, line), line_number);
+        ci18n_record_line(ctx, ci18n_parse_line(ctx, lang, line), line_number);
     }
 
-    return ci18n_finish_load();
+    return ci18n_finish_load(ctx);
 }
 CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_load_from_buffer_impl(language_code, buffer, length);
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_load_from_buffer_impl(&ci18n_ctx, language_code, buffer, length);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static bool ci18n_set_current_impl(const char *language_code)
+static bool ci18n_set_current_impl(ci18n_t *ctx, const char *language_code)
 {
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
     }
 
     if (!language_code)
     {
-        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
     }
 
-    if (ci18n_find_language(language_code) < 0)
+    if (ci18n_find_language(ctx, language_code) < 0)
     {
-        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+        return ci18n_fail(ctx, CI18N_ERR_LANGUAGE_NOT_FOUND);
     }
 
-    ci18n_copy(ci18n_ctx.current_language, sizeof(ci18n_ctx.current_language), language_code);
-    ci18n_succeed();
+    ci18n_copy(ctx->current_language, sizeof(ctx->current_language), language_code);
+    ci18n_succeed(ctx);
     return true;
 }
 CI18N_DEF bool ci18n_set_current(const char *language_code)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_set_current_impl(language_code);
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_set_current_impl(&ci18n_ctx, language_code);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static bool ci18n_set_fallback_impl(const char *language_code)
+static bool ci18n_set_fallback_impl(ci18n_t *ctx, const char *language_code)
 {
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
     }
 
     if (!language_code)
     {
-        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
     }
 
-    if (ci18n_find_language(language_code) < 0)
+    if (ci18n_find_language(ctx, language_code) < 0)
     {
-        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+        return ci18n_fail(ctx, CI18N_ERR_LANGUAGE_NOT_FOUND);
     }
 
-    ci18n_copy(ci18n_ctx.fallback_language, sizeof(ci18n_ctx.fallback_language), language_code);
-    ci18n_succeed();
+    ci18n_copy(ctx->fallback_language, sizeof(ctx->fallback_language), language_code);
+    ci18n_succeed(ctx);
     return true;
 }
 CI18N_DEF bool ci18n_set_fallback(const char *language_code)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_set_fallback_impl(language_code);
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_set_fallback_impl(&ci18n_ctx, language_code);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static const char *ci18n_get_impl(const char *key)
+static const char *ci18n_get_impl(ci18n_t *ctx, const char *key)
 {
     int lang_idx;
     ci18n_language_t *lang;
     int entry_idx;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
         return NULL;
     }
 
     if (!key)
     {
-        ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
         return NULL;
     }
 
     /* Try current language */
-    if (ci18n_ctx.current_language[0] != '\0')
+    if (ctx->current_language[0] != '\0')
     {
-        lang_idx = ci18n_find_language(ci18n_ctx.current_language);
+        lang_idx = ci18n_find_language(ctx, ctx->current_language);
         if (lang_idx >= 0)
         {
-            lang = &ci18n_ctx.languages[lang_idx];
+            lang = &ctx->languages[lang_idx];
             entry_idx = ci18n_find_entry(lang, key);
             if (entry_idx >= 0)
             {
-                ci18n_succeed();
+                ci18n_succeed(ctx);
                 return ci18n_arena_at(&lang->strings, lang->entries[entry_idx].value);
             }
         }
     }
 
     /* Try fallback language */
-    if (ci18n_ctx.fallback_language[0] != '\0')
+    if (ctx->fallback_language[0] != '\0')
     {
-        lang_idx = ci18n_find_language(ci18n_ctx.fallback_language);
+        lang_idx = ci18n_find_language(ctx, ctx->fallback_language);
         if (lang_idx >= 0)
         {
-            lang = &ci18n_ctx.languages[lang_idx];
+            lang = &ctx->languages[lang_idx];
             entry_idx = ci18n_find_entry(lang, key);
             if (entry_idx >= 0)
             {
-                ci18n_succeed();
+                ci18n_succeed(ctx);
                 return ci18n_arena_at(&lang->strings, lang->entries[entry_idx].value);
             }
         }
     }
 
-    ci18n_fail(CI18N_ERR_KEY_NOT_FOUND);
+    ci18n_fail(ctx, CI18N_ERR_KEY_NOT_FOUND);
     return NULL;
 }
 CI18N_DEF const char *ci18n_get(const char *key)
 {
     const char *result;
 
-    CI18N_READ_LOCK();
-    result = ci18n_get_impl(key);
-    CI18N_READ_UNLOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_get_impl(&ci18n_ctx, key);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static const char *ci18n_get_or_key_impl(const char *key)
+static const char *ci18n_get_or_key_impl(ci18n_t *ctx, const char *key)
 {
-    const char *result = ci18n_get_impl(key);
+    const char *result = ci18n_get_impl(ctx, key);
     return result ? result : key;
 }
 CI18N_DEF const char *ci18n_get_or_key(const char *key)
 {
     const char *result;
 
-    CI18N_READ_LOCK();
-    result = ci18n_get_or_key_impl(key);
-    CI18N_READ_UNLOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_get_or_key_impl(&ci18n_ctx, key);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static bool ci18n_has_impl(const char *key)
+static bool ci18n_has_impl(ci18n_t *ctx, const char *key)
 {
-    ci18n_error_t before = CI18N_ERROR_SLOT;
-    bool found = ci18n_get_impl(key) != NULL;
+    ci18n_error_t before = CI18N_ERROR_SLOT(ctx);
+    bool found = ci18n_get_impl(ctx, key) != NULL;
 
     /* Asking is not failing: a miss here must not look like a failed call. */
-    if (!found && CI18N_ERROR_SLOT == CI18N_ERR_KEY_NOT_FOUND)
+    if (!found && CI18N_ERROR_SLOT(ctx) == CI18N_ERR_KEY_NOT_FOUND)
     {
-        CI18N_ERROR_SLOT = before;
+        CI18N_ERROR_SLOT(ctx) = before;
     }
 
     return found;
@@ -2029,12 +2090,12 @@ CI18N_DEF size_t ci18n_get_copy(const char *key, char *out, size_t capacity)
     /* The copy happens inside the lock. That is the whole point: a pointer
      * handed back to the caller could be invalidated by a writer the instant
      * the lock is released, and a copy cannot. */
-    CI18N_READ_LOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
 
-    text = ci18n_get_impl(key);
+    text = ci18n_get_impl(&ci18n_ctx, key);
     if (!text)
     {
-        CI18N_READ_UNLOCK();
+        CI18N_READ_UNLOCK(&ci18n_ctx);
         return 0;
     }
 
@@ -2048,7 +2109,7 @@ CI18N_DEF size_t ci18n_get_copy(const char *key, char *out, size_t capacity)
         out[fits] = 0;
     }
 
-    CI18N_READ_UNLOCK();
+    CI18N_READ_UNLOCK(&ci18n_ctx);
     return len;
 }
 
@@ -2056,92 +2117,92 @@ CI18N_DEF bool ci18n_has(const char *key)
 {
     bool result;
 
-    CI18N_READ_LOCK();
-    result = ci18n_has_impl(key);
-    CI18N_READ_UNLOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_has_impl(&ci18n_ctx, key);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static const char *ci18n_get_current_impl(void)
+static const char *ci18n_get_current_impl(ci18n_t *ctx)
 {
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
         return "";
     }
-    return ci18n_ctx.current_language;
+    return ctx->current_language;
 }
 CI18N_DEF const char *ci18n_get_current(void)
 {
     const char *result;
 
-    CI18N_READ_LOCK();
-    result = ci18n_get_current_impl();
-    CI18N_READ_UNLOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_get_current_impl(&ci18n_ctx);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static size_t ci18n_get_languages_impl(const char **out, size_t capacity)
+static size_t ci18n_get_languages_impl(ci18n_t *ctx, const char **out, size_t capacity)
 {
     size_t i;
     size_t n;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
         return 0;
     }
 
-    ci18n_succeed();
+    ci18n_succeed(ctx);
 
     if (out)
     {
-        n = capacity < ci18n_ctx.language_count ? capacity : ci18n_ctx.language_count;
+        n = capacity < ctx->language_count ? capacity : ctx->language_count;
         for (i = 0; i < n; i++)
         {
-            out[i] = ci18n_ctx.languages[i].code;
+            out[i] = ctx->languages[i].code;
         }
     }
 
-    return ci18n_ctx.language_count;
+    return ctx->language_count;
 }
 CI18N_DEF size_t ci18n_get_languages(const char **out, size_t capacity)
 {
     size_t result;
 
-    CI18N_READ_LOCK();
-    result = ci18n_get_languages_impl(out, capacity);
-    CI18N_READ_UNLOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_get_languages_impl(&ci18n_ctx, out, capacity);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static bool ci18n_set_impl(const char *language_code, const char *key, const char *value)
+static bool ci18n_set_impl(ci18n_t *ctx, const char *language_code, const char *key, const char *value)
 {
     ci18n_language_t *lang;
     size_t key_len;
     size_t value_len;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
     }
 
     if (!language_code || !key || !value)
     {
-        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
     }
 
     if (!ci18n_code_fits(language_code))
     {
-        return ci18n_fail(CI18N_ERR_CODE_TOO_LONG);
+        return ci18n_fail(ctx, CI18N_ERR_CODE_TOO_LONG);
     }
 
-    lang = ci18n_get_or_create_language(language_code);
+    lang = ci18n_get_or_create_language(ctx, language_code);
     if (!lang)
     {
         return false; /* get_or_create already recorded why */
@@ -2160,54 +2221,54 @@ static bool ci18n_set_impl(const char *language_code, const char *key, const cha
         value_len = CI18N_MAX_VALUE_LENGTH - 1;
     }
 
-    if (!ci18n_lang_set(lang, key, key_len, value, value_len))
+    if (!ci18n_lang_set(ctx, lang, key, key_len, value, value_len))
     {
         return false; /* the storage layer already recorded why */
     }
 
-    ci18n_succeed();
+    ci18n_succeed(ctx);
     return true;
 }
 CI18N_DEF bool ci18n_set(const char *language_code, const char *key, const char *value)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_set_impl(language_code, key, value);
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_set_impl(&ci18n_ctx, language_code, key, value);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static bool ci18n_remove_impl(const char *language_code, const char *key)
+static bool ci18n_remove_impl(ci18n_t *ctx, const char *language_code, const char *key)
 {
     int lang_idx;
     ci18n_language_t *lang;
     int entry_idx;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
     }
 
     if (!language_code || !key)
     {
-        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
     }
 
-    lang_idx = ci18n_find_language(language_code);
+    lang_idx = ci18n_find_language(ctx, language_code);
     if (lang_idx < 0)
     {
-        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+        return ci18n_fail(ctx, CI18N_ERR_LANGUAGE_NOT_FOUND);
     }
 
-    lang = &ci18n_ctx.languages[lang_idx];
+    lang = &ctx->languages[lang_idx];
     entry_idx = ci18n_find_entry(lang, key);
 
     if (entry_idx < 0)
     {
-        return ci18n_fail(CI18N_ERR_KEY_NOT_FOUND);
+        return ci18n_fail(ctx, CI18N_ERR_KEY_NOT_FOUND);
     }
 
     /* Move the last entry into the hole rather than shifting everything down.
@@ -2225,52 +2286,52 @@ static bool ci18n_remove_impl(const char *language_code, const char *key)
 
     ci18n_rebuild_buckets(lang);
 
-    ci18n_succeed();
+    ci18n_succeed(ctx);
     return true;
 }
 CI18N_DEF bool ci18n_remove(const char *language_code, const char *key)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_remove_impl(language_code, key);
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_remove_impl(&ci18n_ctx, language_code, key);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static bool ci18n_clear_impl(const char *language_code)
+static bool ci18n_clear_impl(ci18n_t *ctx, const char *language_code)
 {
     int lang_idx;
     ci18n_language_t *lang;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
     }
 
     if (!language_code)
     {
-        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
     }
 
-    lang_idx = ci18n_find_language(language_code);
+    lang_idx = ci18n_find_language(ctx, language_code);
     if (lang_idx < 0)
     {
-        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+        return ci18n_fail(ctx, CI18N_ERR_LANGUAGE_NOT_FOUND);
     }
 
-    lang = &ci18n_ctx.languages[lang_idx];
+    lang = &ctx->languages[lang_idx];
 
     /* Clear current/fallback if being cleared */
-    if (strcmp(ci18n_ctx.current_language, language_code) == 0)
+    if (strcmp(ctx->current_language, language_code) == 0)
     {
-        ci18n_ctx.current_language[0] = '\0';
+        ctx->current_language[0] = '\0';
     }
-    if (strcmp(ci18n_ctx.fallback_language, language_code) == 0)
+    if (strcmp(ctx->fallback_language, language_code) == 0)
     {
-        ci18n_ctx.fallback_language[0] = '\0';
+        ctx->fallback_language[0] = '\0';
     }
 
     /* Unlike removing entries one at a time, clearing reclaims the strings:
@@ -2289,115 +2350,115 @@ static bool ci18n_clear_impl(const char *language_code)
         }
     }
 
-    ci18n_succeed();
+    ci18n_succeed(ctx);
     return true;
 }
 CI18N_DEF bool ci18n_clear(const char *language_code)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_clear_impl(language_code);
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_clear_impl(&ci18n_ctx, language_code);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static bool ci18n_remove_language_impl(const char *language_code)
+static bool ci18n_remove_language_impl(ci18n_t *ctx, const char *language_code)
 {
     int lang_idx;
     size_t last;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
     }
 
     if (!language_code)
     {
-        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
     }
 
-    lang_idx = ci18n_find_language(language_code);
+    lang_idx = ci18n_find_language(ctx, language_code);
     if (lang_idx < 0)
     {
-        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+        return ci18n_fail(ctx, CI18N_ERR_LANGUAGE_NOT_FOUND);
     }
 
     /* Pointing at a language that no longer exists would be worse than
      * pointing at nothing, so drop the selection first. */
-    if (strcmp(ci18n_ctx.current_language, language_code) == 0)
+    if (strcmp(ctx->current_language, language_code) == 0)
     {
-        ci18n_ctx.current_language[0] = '\0';
+        ctx->current_language[0] = '\0';
     }
-    if (strcmp(ci18n_ctx.fallback_language, language_code) == 0)
+    if (strcmp(ctx->fallback_language, language_code) == 0)
     {
-        ci18n_ctx.fallback_language[0] = '\0';
+        ctx->fallback_language[0] = '\0';
     }
 
-    ci18n_lang_release(&ci18n_ctx.languages[lang_idx]);
+    ci18n_lang_release(&ctx->languages[lang_idx]);
 
     /* Move the last language into the hole. Languages are found by scanning
      * for the code rather than by index, so nothing holds a stale one, and
      * this avoids shifting the rest. */
-    last = ci18n_ctx.language_count - 1;
+    last = ctx->language_count - 1;
     if ((size_t)lang_idx != last)
     {
-        ci18n_ctx.languages[lang_idx] = ci18n_ctx.languages[last];
-        memset(&ci18n_ctx.languages[last], 0, sizeof(ci18n_language_t));
+        ctx->languages[lang_idx] = ctx->languages[last];
+        memset(&ctx->languages[last], 0, sizeof(ci18n_language_t));
     }
 
-    ci18n_ctx.language_count--;
+    ctx->language_count--;
 
-    ci18n_succeed();
+    ci18n_succeed(ctx);
     return true;
 }
 CI18N_DEF bool ci18n_remove_language(const char *language_code)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_remove_language_impl(language_code);
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_remove_language_impl(&ci18n_ctx, language_code);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static size_t ci18n_count_impl(const char *language_code)
+static size_t ci18n_count_impl(ci18n_t *ctx, const char *language_code)
 {
     int lang_idx;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
         return 0;
     }
 
     if (!language_code)
     {
-        ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
         return 0;
     }
 
-    lang_idx = ci18n_find_language(language_code);
+    lang_idx = ci18n_find_language(ctx, language_code);
     if (lang_idx < 0)
     {
-        ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+        ci18n_fail(ctx, CI18N_ERR_LANGUAGE_NOT_FOUND);
         return 0;
     }
 
-    ci18n_succeed();
-    return ci18n_ctx.languages[lang_idx].count;
+    ci18n_succeed(ctx);
+    return ctx->languages[lang_idx].count;
 }
 CI18N_DEF size_t ci18n_count(const char *language_code)
 {
     size_t result;
 
-    CI18N_READ_LOCK();
-    result = ci18n_count_impl(language_code);
-    CI18N_READ_UNLOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_count_impl(&ci18n_ctx, language_code);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
 }
@@ -2412,8 +2473,8 @@ CI18N_DEF size_t ci18n_count(const char *language_code)
 
 /* The unlocked cores, declared here because the formatters sit above them and
  * must not call the locking wrappers: these locks are not recursive. */
-static const char *ci18n_get_impl(const char *key);
-static const char *ci18n_plural_impl(const char *key, long count);
+static const char *ci18n_get_impl(ci18n_t *ctx, const char *key);
+static const char *ci18n_plural_impl(ci18n_t *ctx, const char *key, long count);
 
 /*
  * Writes into the caller's buffer while counting what the whole result would
@@ -2618,6 +2679,8 @@ static void ci18n_render_long(char *out, size_t capacity, long value)
 
 CI18N_DEF size_t ci18n_format(char *out, size_t capacity, const char *key, ...)
 {
+    ci18n_t *ctx = &ci18n_ctx;
+
     va_list args;
     const char *text;
     size_t needed;
@@ -2627,12 +2690,12 @@ CI18N_DEF size_t ci18n_format(char *out, size_t capacity, const char *key, ...)
         out[0] = '\0';
     }
 
-    CI18N_READ_LOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
 
-    text = ci18n_get_impl(key);
+    text = ci18n_get_impl(&ci18n_ctx, key);
     if (!text)
     {
-        CI18N_READ_UNLOCK();
+        CI18N_READ_UNLOCK(&ci18n_ctx);
         return 0;
     }
 
@@ -2640,14 +2703,16 @@ CI18N_DEF size_t ci18n_format(char *out, size_t capacity, const char *key, ...)
     needed = ci18n_expand(out, out ? capacity : 0, text, args, NULL);
     va_end(args);
 
-    ci18n_succeed();
-    CI18N_READ_UNLOCK();
+    ci18n_succeed(ctx);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
     return needed;
 }
 
 CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key,
                                      long count, ...)
 {
+    ci18n_t *ctx = &ci18n_ctx;
+
     va_list args;
     const char *text;
     char count_text[24];
@@ -2658,12 +2723,12 @@ CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key
         out[0] = '\0';
     }
 
-    CI18N_READ_LOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
 
-    text = ci18n_plural_impl(key, count);
+    text = ci18n_plural_impl(&ci18n_ctx, key, count);
     if (!text)
     {
-        CI18N_READ_UNLOCK();
+        CI18N_READ_UNLOCK(&ci18n_ctx);
         return 0;
     }
 
@@ -2673,8 +2738,8 @@ CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key
     needed = ci18n_expand(out, out ? capacity : 0, text, args, count_text);
     va_end(args);
 
-    ci18n_succeed();
-    CI18N_READ_UNLOCK();
+    ci18n_succeed(ctx);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
     return needed;
 }
 
@@ -2997,30 +3062,30 @@ static bool ci18n_plural_key(char *out, size_t capacity, const char *key, const 
     return true;
 }
 
-static const char *ci18n_plural_impl(const char *key, long count)
+static const char *ci18n_plural_impl(ci18n_t *ctx, const char *key, long count)
 {
     char buffer[CI18N_MAX_KEY_LENGTH];
     ci18n_plural_category_t category;
     const char *result;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
         return NULL;
     }
 
     if (!key)
     {
-        ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
         return NULL;
     }
 
-    category = ci18n_plural_category(ci18n_ctx.current_language, count);
+    category = ci18n_plural_category(ctx->current_language, count);
 
     /* The exact form for this count. */
     if (ci18n_plural_key(buffer, sizeof(buffer), key, ci18n_plural_category_name(category)))
     {
-        result = ci18n_get_impl(buffer);
+        result = ci18n_get_impl(ctx, buffer);
         if (result)
         {
             return result;
@@ -3031,7 +3096,7 @@ static const char *ci18n_plural_impl(const char *key, long count)
     if (category != CI18N_PLURAL_OTHER &&
         ci18n_plural_key(buffer, sizeof(buffer), key, "other"))
     {
-        result = ci18n_get_impl(buffer);
+        result = ci18n_get_impl(ctx, buffer);
         if (result)
         {
             return result;
@@ -3039,30 +3104,30 @@ static const char *ci18n_plural_impl(const char *key, long count)
     }
 
     /* A translation with no plural forms at all. */
-    result = ci18n_get_impl(key);
+    result = ci18n_get_impl(ctx, key);
     if (result)
     {
         return result;
     }
 
-    ci18n_fail(CI18N_ERR_KEY_NOT_FOUND);
+    ci18n_fail(ctx, CI18N_ERR_KEY_NOT_FOUND);
     return NULL;
 }
 CI18N_DEF const char *ci18n_plural(const char *key, long count)
 {
     const char *result;
 
-    CI18N_READ_LOCK();
-    result = ci18n_plural_impl(key, count);
-    CI18N_READ_UNLOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_plural_impl(&ci18n_ctx, key, count);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static const char *ci18n_plural_or_key_impl(const char *key, long count)
+static const char *ci18n_plural_or_key_impl(ci18n_t *ctx, const char *key, long count)
 {
-    const char *result = ci18n_plural_impl(key, count);
+    const char *result = ci18n_plural_impl(ctx, key, count);
 
     return result ? result : key;
 }
@@ -3070,9 +3135,9 @@ CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count)
 {
     const char *result;
 
-    CI18N_READ_LOCK();
-    result = ci18n_plural_or_key_impl(key, count);
-    CI18N_READ_UNLOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_plural_or_key_impl(&ci18n_ctx, key, count);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
 }
@@ -3130,12 +3195,14 @@ static size_t ci18n_normalize_locale(char *out, size_t capacity, const char *loc
 
 CI18N_DEF size_t ci18n_detect_locale(char *out, size_t capacity)
 {
+    ci18n_t *ctx = &ci18n_ctx;
+
     static const char *variables[] = {"LC_ALL", "LC_MESSAGES", "LANG"};
     size_t i;
 
     if (!out || capacity == 0)
     {
-        ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
         return 0;
     }
 
@@ -3153,7 +3220,7 @@ CI18N_DEF size_t ci18n_detect_locale(char *out, size_t capacity)
 
             if (len > 0)
             {
-                ci18n_succeed();
+                ci18n_succeed(ctx);
                 return len;
             }
         }
@@ -3184,7 +3251,7 @@ CI18N_DEF size_t ci18n_detect_locale(char *out, size_t capacity)
 
                 if (len > 0)
                 {
-                    ci18n_succeed();
+                    ci18n_succeed(ctx);
                     return len;
                 }
             }
@@ -3192,26 +3259,26 @@ CI18N_DEF size_t ci18n_detect_locale(char *out, size_t capacity)
     }
 #endif
 
-    ci18n_succeed();
+    ci18n_succeed(ctx);
     return 0;
 }
 
-static bool ci18n_set_current_best_impl(const char *locale)
+static bool ci18n_set_current_best_impl(ci18n_t *ctx, const char *locale)
 {
     char candidate[CI18N_MAX_CODE_LENGTH];
     char detected[CI18N_MAX_CODE_LENGTH];
     size_t len;
 
-    if (!ci18n_ctx.initialized)
+    if (!ctx->initialized)
     {
-        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
     }
 
     if (!locale)
     {
         if (ci18n_detect_locale(detected, sizeof(detected)) == 0)
         {
-            return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+            return ci18n_fail(ctx, CI18N_ERR_LANGUAGE_NOT_FOUND);
         }
 
         locale = detected;
@@ -3219,7 +3286,7 @@ static bool ci18n_set_current_best_impl(const char *locale)
 
     if (!ci18n_code_fits(locale))
     {
-        return ci18n_fail(CI18N_ERR_CODE_TOO_LONG);
+        return ci18n_fail(ctx, CI18N_ERR_CODE_TOO_LONG);
     }
 
     ci18n_copy(candidate, sizeof(candidate), locale);
@@ -3229,11 +3296,11 @@ static bool ci18n_set_current_best_impl(const char *locale)
      * separators are accepted, since a caller may pass either spelling. */
     for (;;)
     {
-        if (len > 0 && ci18n_find_language(candidate) >= 0)
+        if (len > 0 && ci18n_find_language(ctx, candidate) >= 0)
         {
-            ci18n_copy(ci18n_ctx.current_language, sizeof(ci18n_ctx.current_language),
+            ci18n_copy(ctx->current_language, sizeof(ctx->current_language),
                        candidate);
-            ci18n_succeed();
+            ci18n_succeed(ctx);
             return true;
         }
 
@@ -3252,31 +3319,31 @@ static bool ci18n_set_current_best_impl(const char *locale)
         candidate[len] = '\0';
     }
 
-    return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+    return ci18n_fail(ctx, CI18N_ERR_LANGUAGE_NOT_FOUND);
 }
 CI18N_DEF bool ci18n_set_current_best(const char *locale)
 {
     bool result;
 
-    CI18N_WRITE_LOCK();
-    result = ci18n_set_current_best_impl(locale);
-    CI18N_WRITE_UNLOCK();
+    CI18N_WRITE_LOCK(&ci18n_ctx);
+    result = ci18n_set_current_best_impl(&ci18n_ctx, locale);
+    CI18N_WRITE_UNLOCK(&ci18n_ctx);
 
     return result;
 }
 
 
-static bool ci18n_is_initialized_impl(void)
+static bool ci18n_is_initialized_impl(ci18n_t *ctx)
 {
-    return ci18n_ctx.initialized;
+    return ctx->initialized;
 }
 CI18N_DEF bool ci18n_is_initialized(void)
 {
     bool result;
 
-    CI18N_READ_LOCK();
-    result = ci18n_is_initialized_impl();
-    CI18N_READ_UNLOCK();
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_is_initialized_impl(&ci18n_ctx);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
 }
@@ -3284,7 +3351,10 @@ CI18N_DEF bool ci18n_is_initialized(void)
 
 CI18N_DEF ci18n_error_t ci18n_last_error(void)
 {
-    return CI18N_ERROR_SLOT;
+    /* The default catalogue is named inline rather than through a local: in
+     * the shared mode the slot is thread-local and the macro discards its
+     * argument, which would leave the local unused. */
+    return CI18N_ERROR_SLOT(&ci18n_ctx);
 }
 
 CI18N_DEF const char *ci18n_error_string(ci18n_error_t error)
@@ -3320,7 +3390,7 @@ CI18N_DEF const char *ci18n_error_string(ci18n_error_t error)
 
 CI18N_DEF const ci18n_load_stats_t *ci18n_last_load_stats(void)
 {
-    return &CI18N_STATS_SLOT;
+    return &CI18N_STATS_SLOT(&ci18n_ctx);
 }
 
 #ifdef CI18N_THREAD_LOCAL_CONTEXT
