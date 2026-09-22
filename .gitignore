@@ -17,6 +17,9 @@ test_ci18n.exe
 test_thread_local
 test_thread_local.exe
 
+# Test fixtures, left behind only if a test fails early
+ci18n_test_tmp.txt
+
 # Make
 Makefile.bak
 

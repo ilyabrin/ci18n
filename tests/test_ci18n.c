@@ -474,6 +474,421 @@ TEST(test_count_nonexistent_language)
 }
 
 /* ============================================================================
+ * File loading
+ *
+ * ci18n_load_language() is the only entry point that touches the filesystem,
+ * and it is the one most likely to be handed a file the program did not
+ * write. Fixtures are written in binary mode so a test controls the exact
+ * line terminators, then removed.
+ * ============================================================================ */
+
+#define TEMP_FILE "ci18n_test_tmp.txt"
+
+static int write_file(const char *path, const char *bytes, size_t len)
+{
+    FILE *f = fopen(path, "wb");
+    size_t written = 0;
+
+    if (!f)
+    {
+        return 0;
+    }
+
+    if (len > 0)
+    {
+        written = fwrite(bytes, 1, len, f);
+    }
+
+    fclose(f);
+    return written == len;
+}
+
+/* Writes a NUL-terminated fixture. */
+static int write_text(const char *path, const char *text)
+{
+    return write_file(path, text, strlen(text));
+}
+
+TEST(test_load_language_from_file)
+{
+    ci18n_init();
+
+    ASSERT(write_text(TEMP_FILE, "greeting=Hello\nfarewell=Goodbye\n"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 2);
+
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("greeting"), "Hello");
+    ASSERT_STR_EQ(ci18n_get("farewell"), "Goodbye");
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_language_missing_file)
+{
+    ci18n_init();
+
+    ASSERT(ci18n_load_language("en", "no_such_file_here.txt") == false);
+
+    /* A failed open must not leave a half-created language behind. */
+    ASSERT(ci18n_get_languages(NULL, 0) == 0);
+
+    ci18n_free();
+}
+
+TEST(test_load_language_empty_file)
+{
+    ci18n_init();
+
+    ASSERT(write_file(TEMP_FILE, "", 0));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 0);
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_language_crlf)
+{
+    ci18n_init();
+
+    /* A file authored on Windows. The value must not keep the CR. */
+    ASSERT(write_text(TEMP_FILE, "a=one\r\nb=two\r\n"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 2);
+
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("a"), "one");
+    ASSERT_STR_EQ(ci18n_get("b"), "two");
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_language_lone_cr)
+{
+    ci18n_init();
+
+    /* Classic Mac terminators. fgets() does not split on CR, so the whole
+     * file arrives as one line and only the first pair survives. Asserted
+     * as the behaviour it is, not as the behaviour one might want. */
+    ASSERT(write_text(TEMP_FILE, "a=one\rb=two\r"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 1);
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_language_no_trailing_newline)
+{
+    ci18n_init();
+
+    ASSERT(write_text(TEMP_FILE, "a=one\nb=two"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 2);
+
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("b"), "two");
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_language_bom)
+{
+    ci18n_init();
+
+    /* A UTF-8 BOM used to make the first key unreachable. */
+    ASSERT(write_text(TEMP_FILE, "\xEF\xBB\xBFgreeting=Hello\nfarewell=Goodbye\n"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 2);
+
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("greeting"), "Hello");
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_language_comments_and_blank_lines)
+{
+    ci18n_init();
+
+    ASSERT(write_text(TEMP_FILE,
+                      "# a hash comment\n"
+                      "; a semicolon comment\n"
+                      "\n"
+                      "   \n"
+                      "  a=one\n"
+                      "\t# indented comment\n"
+                      "b=two\n"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 2);
+
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("a"), "one");
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_language_malformed_lines_are_skipped)
+{
+    ci18n_init();
+
+    /* Lines with no separator are dropped and the rest still load. Note that
+     * the call reports success even when every line is malformed: there are
+     * no parse diagnostics yet. */
+    ASSERT(write_text(TEMP_FILE,
+                      "this line has no separator\n"
+                      "a=one\n"
+                      "=value without a key\n"
+                      "   =also no key\n"
+                      "b=two\n"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 2);
+
+    ASSERT(write_text(TEMP_FILE, "nothing here is valid\nnor here\n"));
+    ASSERT(ci18n_load_language("garbage", TEMP_FILE) == true);
+    ASSERT(ci18n_count("garbage") == 0);
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_language_merges_into_existing)
+{
+    ci18n_init();
+
+    ASSERT(write_text(TEMP_FILE, "a=one\nb=two\n"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+
+    /* A second load adds new keys and overwrites the ones it repeats. */
+    ASSERT(write_text(TEMP_FILE, "b=TWO\nc=three\n"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 3);
+    ASSERT(ci18n_get_languages(NULL, 0) == 1);
+
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("a"), "one");
+    ASSERT_STR_EQ(ci18n_get("b"), "TWO");
+    ASSERT_STR_EQ(ci18n_get("c"), "three");
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_language_utf8_from_file)
+{
+    ci18n_init();
+
+    ASSERT(write_text(TEMP_FILE, "greeting=\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82\n"));
+    ASSERT(ci18n_load_language("ru", TEMP_FILE) == true);
+
+    ci18n_set_current("ru");
+    ASSERT_STR_EQ(ci18n_get("greeting"), "\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82");
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+/* ============================================================================
+ * Argument handling and limits
+ * ============================================================================ */
+
+TEST(test_null_arguments)
+{
+    ci18n_init();
+
+    ci18n_set("en", "k", "v");
+    ci18n_set_current("en");
+
+    ASSERT(ci18n_load_language(NULL, "f.txt") == false);
+    ASSERT(ci18n_load_language("en", NULL) == false);
+    ASSERT(ci18n_load_from_buffer(NULL, "a=b", 3) == false);
+    ASSERT(ci18n_load_from_buffer("en", NULL, 3) == false);
+
+    ASSERT(ci18n_set_current(NULL) == false);
+    ASSERT(ci18n_set_fallback(NULL) == false);
+
+    ASSERT(ci18n_get(NULL) == NULL);
+    ASSERT(ci18n_get_or_key(NULL) == NULL);
+    ASSERT(ci18n_has(NULL) == false);
+
+    ASSERT(ci18n_set(NULL, "k", "v") == false);
+    ASSERT(ci18n_set("en", NULL, "v") == false);
+    ASSERT(ci18n_set("en", "k", NULL) == false);
+
+    ASSERT(ci18n_remove(NULL, "k") == false);
+    ASSERT(ci18n_remove("en", NULL) == false);
+    ASSERT(ci18n_clear(NULL) == false);
+    ASSERT(ci18n_count(NULL) == 0);
+
+    /* None of the above may have disturbed the real entry. */
+    ASSERT_STR_EQ(ci18n_get("k"), "v");
+    ASSERT(ci18n_count("en") == 1);
+
+    ci18n_free();
+}
+
+TEST(test_calls_before_init)
+{
+    /* Nothing may touch the context before ci18n_init(). Reached here with
+     * no init because the previous test freed. */
+    ASSERT(ci18n_is_initialized() == false);
+
+    ASSERT(ci18n_load_language("en", "f.txt") == false);
+    ASSERT(ci18n_load_from_buffer("en", "a=b", 3) == false);
+    ASSERT(ci18n_set("en", "k", "v") == false);
+    ASSERT(ci18n_set_current("en") == false);
+    ASSERT(ci18n_set_fallback("en") == false);
+    ASSERT(ci18n_get("k") == NULL);
+    ASSERT(ci18n_has("k") == false);
+    ASSERT(ci18n_remove("en", "k") == false);
+    ASSERT(ci18n_clear("en") == false);
+    ASSERT(ci18n_count("en") == 0);
+    ASSERT(ci18n_get_languages(NULL, 0) == 0);
+    ASSERT_STR_EQ(ci18n_get_current(), "");
+
+    /* ci18n_free() on an uninitialized context must be a no-op, not a crash. */
+    ci18n_free();
+}
+
+TEST(test_max_languages)
+{
+    char code[16];
+    size_t i;
+
+    ci18n_init();
+
+    for (i = 0; i < CI18N_MAX_LANGUAGES; i++)
+    {
+        sprintf(code, "l%u", (unsigned int)i);
+        ASSERT(ci18n_set(code, "k", "v") == true);
+    }
+
+    ASSERT(ci18n_get_languages(NULL, 0) == CI18N_MAX_LANGUAGES);
+
+    /* One past the limit fails instead of overflowing the array. */
+    ASSERT(ci18n_set("overflow", "k", "v") == false);
+    ASSERT(ci18n_get_languages(NULL, 0) == CI18N_MAX_LANGUAGES);
+
+    /* An existing language still works while the table is full. */
+    ASSERT(ci18n_set("l0", "another", "v") == true);
+
+    ci18n_free();
+}
+
+TEST(test_max_keys_per_language)
+{
+    char key[16];
+    size_t i;
+
+    ci18n_init();
+
+    for (i = 0; i < CI18N_MAX_KEYS_PER_LANGUAGE; i++)
+    {
+        sprintf(key, "k%u", (unsigned int)i);
+        ASSERT(ci18n_set("en", key, "v") == true);
+    }
+
+    ASSERT(ci18n_count("en") == CI18N_MAX_KEYS_PER_LANGUAGE);
+
+    ASSERT(ci18n_set("en", "overflow", "v") == false);
+    ASSERT(ci18n_count("en") == CI18N_MAX_KEYS_PER_LANGUAGE);
+
+    /* Overwriting an existing key needs no new slot, so it still works. */
+    ASSERT(ci18n_set("en", "k0", "updated") == true);
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("k0"), "updated");
+
+    ci18n_free();
+}
+
+TEST(test_long_key_is_truncated)
+{
+    char long_key[CI18N_MAX_KEY_LENGTH + 64];
+    char truncated[CI18N_MAX_KEY_LENGTH];
+
+    ci18n_init();
+
+    memset(long_key, 'k', sizeof(long_key) - 1);
+    long_key[sizeof(long_key) - 1] = '\0';
+
+    memcpy(truncated, long_key, CI18N_MAX_KEY_LENGTH - 1);
+    truncated[CI18N_MAX_KEY_LENGTH - 1] = '\0';
+
+    /* Stored under the truncated key, silently. The full key then misses,
+     * which is why over-long keys are a documented sharp edge. */
+    ASSERT(ci18n_set("en", long_key, "v") == true);
+    ci18n_set_current("en");
+
+    ASSERT(ci18n_get(long_key) == NULL);
+    ASSERT_STR_EQ(ci18n_get(truncated), "v");
+
+    ci18n_free();
+}
+
+TEST(test_long_value_is_truncated)
+{
+    char long_value[CI18N_MAX_VALUE_LENGTH + 64];
+    const char *stored;
+
+    ci18n_init();
+
+    memset(long_value, 'v', sizeof(long_value) - 1);
+    long_value[sizeof(long_value) - 1] = '\0';
+
+    ASSERT(ci18n_set("en", "k", long_value) == true);
+    ci18n_set_current("en");
+
+    stored = ci18n_get("k");
+    ASSERT(stored != NULL);
+    ASSERT(strlen(stored) == CI18N_MAX_VALUE_LENGTH - 1);
+
+    ci18n_free();
+}
+
+TEST(test_long_language_code_is_truncated)
+{
+    ci18n_init();
+
+    /* Codes are held in a 16 byte field, so they truncate at 15 characters.
+     * Two codes agreeing on those 15 characters collapse into one language,
+     * and the full string can be written but never selected: ci18n_set()
+     * truncates while ci18n_set_current() compares the whole string. */
+    ASSERT(ci18n_set("long_code_aaaaaa_one", "k", "first") == true);
+    ASSERT(ci18n_count("long_code_aaaaa") == 1);
+    ASSERT(ci18n_count("long_code_aaaaaa_one") == 0);
+
+    ASSERT(ci18n_set_current("long_code_aaaaaa_one") == false);
+    ASSERT(ci18n_set_current("long_code_aaaaa") == true);
+    ASSERT_STR_EQ(ci18n_get("k"), "first");
+
+    /* Worse than a plain collision. Writes truncate but lookups compare the
+     * whole string, so a second over-long code sharing those 15 characters
+     * creates a duplicate slot holding the identical stored code.
+     * ci18n_find_language() always returns the first, so the second is
+     * unreachable and just burns one of CI18N_MAX_LANGUAGES. */
+    ASSERT(ci18n_set("long_code_aaaaaa_two", "k", "second") == true);
+    ASSERT(ci18n_get_languages(NULL, 0) == 2);
+
+    {
+        const char *codes[2];
+
+        ASSERT(ci18n_get_languages(codes, 2) == 2);
+        ASSERT_STR_EQ(codes[0], codes[1]);
+    }
+
+    /* The second write is invisible: the first slot still answers. */
+    ASSERT_STR_EQ(ci18n_get("k"), "first");
+
+    ci18n_free();
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -507,6 +922,26 @@ int main(void)
     RUN_TEST(test_multiple_equals_in_value);
     RUN_TEST(test_get_current);
     RUN_TEST(test_count_nonexistent_language);
+
+    RUN_TEST(test_load_language_from_file);
+    RUN_TEST(test_load_language_missing_file);
+    RUN_TEST(test_load_language_empty_file);
+    RUN_TEST(test_load_language_crlf);
+    RUN_TEST(test_load_language_lone_cr);
+    RUN_TEST(test_load_language_no_trailing_newline);
+    RUN_TEST(test_load_language_bom);
+    RUN_TEST(test_load_language_comments_and_blank_lines);
+    RUN_TEST(test_load_language_malformed_lines_are_skipped);
+    RUN_TEST(test_load_language_merges_into_existing);
+    RUN_TEST(test_load_language_utf8_from_file);
+
+    RUN_TEST(test_null_arguments);
+    RUN_TEST(test_calls_before_init);
+    RUN_TEST(test_max_languages);
+    RUN_TEST(test_max_keys_per_language);
+    RUN_TEST(test_long_key_is_truncated);
+    RUN_TEST(test_long_value_is_truncated);
+    RUN_TEST(test_long_language_code_is_truncated);
 
     printf("\n=== Results ===\n");
     printf("Total:   %d\n", tests_run);
