@@ -170,8 +170,9 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 ## Building
 
 ```bash
-make            # build the example, then build and run the tests
-make test       # tests only
+make              # build the example, then build and run the tests
+make test         # tests only
+make test-threads # thread-local context tests, needs pthreads
 make clean
 ```
 

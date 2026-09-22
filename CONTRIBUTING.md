@@ -26,6 +26,39 @@ macOS, and MinGW gcc on Windows:
 make clean && make CC=clang EXTRA_CFLAGS=-Werror
 ```
 
+### Thread-local context tests
+
+`make test-threads` builds [tests/test_thread_local.c](tests/test_thread_local.c)
+with `CI18N_THREAD_LOCAL_CONTEXT` and checks that concurrent threads really do
+get separate contexts. It needs pthreads, so it is not part of `make`.
+
+```bash
+make test-threads
+```
+
+### Other standards
+
+The header has branches that only compile under a newer standard, so CI sweeps
+all three. `CSTD` selects one without restating the warning flags:
+
+```bash
+make clean && make CSTD=c11 EXTRA_CFLAGS=-Werror
+```
+
+### Sanitizers
+
+CI runs the suite, the example and the thread tests under
+AddressSanitizer + UndefinedBehaviorSanitizer and under ThreadSanitizer. Worth
+running locally before touching the parser or anything that allocates:
+
+```bash
+make clean
+make test EXTRA_CFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -g"
+```
+
+Note that MinGW ships without the sanitizer runtimes, so on Windows this needs
+WSL, MSVC or a Linux box.
+
 ## Adding a test
 
 Tests live in [tests/test_ci18n.c](tests/test_ci18n.c) and use a few macros at

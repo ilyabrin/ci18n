@@ -171,8 +171,9 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 ## Сборка
 
 ```bash
-make            # собрать пример, затем собрать и прогнать тесты
-make test       # только тесты
+make              # собрать пример, затем собрать и прогнать тесты
+make test         # только тесты
+make test-threads # тесты thread-local контекста, нужны pthreads
 make clean
 ```
 

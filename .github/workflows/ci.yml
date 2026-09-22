@@ -13,6 +13,7 @@ env:
 
 jobs:
   build:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,10 +32,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y gcc clang make
 
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install llvm
-
       # `make` builds the example, then builds and runs the tests.
       - name: Build and test (Unix)
         if: runner.os != 'Windows'
@@ -51,3 +48,111 @@ jobs:
       - name: Run example (Windows)
         if: runner.os == 'Windows'
         run: ./example.exe
+
+  # The header has branches that only compile under a newer standard, notably
+  # the _Thread_local fallback. Without this sweep they are never built.
+  standards:
+    name: ${{ matrix.compiler }} / ${{ matrix.std }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        std: [c99, c11, c17]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc clang make
+
+      - name: Build and test
+        run: make CC=${{ matrix.compiler }} CSTD=${{ matrix.std }}
+
+      - name: Run example
+        run: ./example
+
+  # CI18N_THREAD_LOCAL_CONTEXT is a compile-time branch, so it needs its own
+  # build to be covered at all. The deprecated spelling is built too, because
+  # the alias has to keep working.
+  thread-local:
+    name: threads / ${{ matrix.os }} / ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        compiler: [gcc, clang]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc clang make
+
+      - name: Thread-local context tests
+        run: make CC=${{ matrix.compiler }} test-threads
+
+      # The test file defines the current macro itself, so adding the
+      # deprecated spelling exercises the alias on top of it.
+      - name: Same tests through the deprecated macro name
+        run: |
+          make clean
+          make CC=${{ matrix.compiler }} test-threads EXTRA_CFLAGS="-Werror -DCI18N_THREAD_SAFE"
+
+      # The default build shares one global context. Nothing in the suite
+      # threads, but it must stay clean with the macro absent too.
+      - name: Build and test without the macro
+        run: |
+          make clean
+          make CC=${{ matrix.compiler }}
+
+  sanitizers:
+    name: ${{ matrix.sanitizer }} / ${{ matrix.compiler }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        sanitizer: [address-undefined, thread]
+
+    env:
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      TSAN_OPTIONS: halt_on_error=1
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc clang make
+
+      - name: Set sanitizer flags
+        run: |
+          case "${{ matrix.sanitizer }}" in
+            address-undefined)
+              flags="-fsanitize=address,undefined -fno-sanitize-recover=all" ;;
+            thread)
+              flags="-fsanitize=thread" ;;
+          esac
+          echo "SAN_FLAGS=$flags -fno-omit-frame-pointer -g" >> "$GITHUB_ENV"
+
+      # Every allocation in this library is hand managed, and the parser does
+      # its own pointer arithmetic, so the suite is worth running instrumented.
+      - name: Tests
+        run: make CC=${{ matrix.compiler }} test EXTRA_CFLAGS="-Werror $SAN_FLAGS"
+
+      # Covers the file loading path, which the unit tests do not touch yet.
+      - name: Example
+        run: |
+          make clean
+          make CC=${{ matrix.compiler }} example EXTRA_CFLAGS="-Werror $SAN_FLAGS"
+          ./example
+
+      # Only the thread sanitizer has anything to say about this one, but ASan
+      # and UBSan still check the per-thread allocations.
+      - name: Thread-local context tests
+        run: |
+          make clean
+          make CC=${{ matrix.compiler }} test-threads EXTRA_CFLAGS="-Werror $SAN_FLAGS"
