@@ -24,7 +24,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads fuzz fuzz-run fuzz-replay fuzz-corpus
+.PHONY: all clean example test test-threads test-po fuzz fuzz-run fuzz-replay fuzz-corpus
 
 all: example test
 
@@ -41,6 +41,15 @@ test: tests/test_ci18n.c include/ci18n.h
 test-threads: tests/test_thread_local.c include/ci18n.h
 	$(CC) $(ALL_CFLAGS) -pthread -o test_thread_local tests/test_thread_local.c
 	./test_thread_local
+
+# Round trip through the .po converter. Needs python3, so it is not part of
+# `all`, and the converter lives outside the library on purpose.
+PYTHON ?= python3
+
+test-po: tests/test_po_roundtrip.c tools/po2ci18n.py tests/po/sample.po include/ci18n.h
+	$(PYTHON) tools/po2ci18n.py tests/po/sample.po -o po_roundtrip.txt
+	$(CC) $(ALL_CFLAGS) -o test_po_roundtrip tests/test_po_roundtrip.c
+	./test_po_roundtrip po_roundtrip.txt
 
 # Fuzzing the parser. libFuzzer ships with clang, so this uses clang whatever
 # CC is set to; override with FUZZ_CC if yours lives elsewhere.
@@ -111,4 +120,5 @@ uninstall:
 clean:
 	$(RM) example example.exe test_ci18n test_ci18n.exe \
 		test_thread_local test_thread_local.exe \
-		fuzz_load_buffer fuzz_load_buffer.exe fuzz_replay fuzz_replay.exe
+		fuzz_load_buffer fuzz_load_buffer.exe fuzz_replay fuzz_replay.exe \
+		test_po_roundtrip test_po_roundtrip.exe po_roundtrip.txt

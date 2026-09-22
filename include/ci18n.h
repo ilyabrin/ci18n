@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.3.0
+ * ci18n.h - v2.4.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -53,9 +53,9 @@ Second line.
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 3
+#define CI18N_VERSION_MINOR 4
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.3.0"
+#define CI18N_VERSION_STRING "2.4.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -387,6 +387,22 @@ extern "C"
      * Returns: true if cleared, false if language not found
      */
     CI18N_DEF bool ci18n_clear(const char *language_code);
+
+    /*
+     * Unload a language entirely, freeing its memory and releasing its slot.
+     *
+     * ci18n_clear() empties a language but keeps it loaded, so it still
+     * occupies one of CI18N_MAX_LANGUAGES. This removes it outright, which is
+     * what you want for a program that switches between many languages over a
+     * long run and would otherwise fill the table with empty ones.
+     *
+     * If the language being removed is the current or the fallback one, that
+     * selection is cleared, since pointing at a language that no longer exists
+     * would be worse than pointing at nothing.
+     *
+     * Returns: true if removed, false if no such language
+     */
+    CI18N_DEF bool ci18n_remove_language(const char *language_code);
 
     /*
      * Get translation count for a language.
@@ -1120,11 +1136,12 @@ static bool ci18n_lang_set_ex(ci18n_language_t *lang,
     size_t bucket;
     int existing;
     char decoded_key[CI18N_MAX_KEY_LENGTH];
+    bool unescape_key = unescape;
 
     /* Lookups compare decoded keys, so a key written with escapes has to be
      * decoded before it is hashed. This is the one place a scratch buffer
      * earns its keep, and only when the key actually contains a backslash. */
-    if (unescape && memchr(key, '\\', key_len) != NULL)
+    if (unescape_key && memchr(key, '\\', key_len) != NULL)
     {
         size_t decoded_len = ci18n_unescaped_length(key, key_len);
         uint32_t offset;
@@ -1145,7 +1162,11 @@ static bool ci18n_lang_set_ex(ci18n_language_t *lang,
 
         key = decoded_key;
         key_len = decoded_len;
-        unescape = false; /* already decoded */
+
+        /* The key is decoded now; the value still is not. These were one
+         * flag, which meant a key containing a backslash silently switched
+         * decoding off for its own value. */
+        unescape_key = false;
     }
 
     hash = ci18n_hash(key, key_len);
@@ -1214,16 +1235,26 @@ static bool ci18n_lang_set_ex(ci18n_language_t *lang,
         return false;
     }
 
-    if (unescape)
+    if (unescape_key)
     {
-        if (!ci18n_arena_add_unescaped(&lang->strings, key, key_len, &key_offset) ||
-            !ci18n_arena_add_unescaped(&lang->strings, value, value_len, &value_offset))
+        if (!ci18n_arena_add_unescaped(&lang->strings, key, key_len, &key_offset))
         {
             return false;
         }
     }
-    else if (!ci18n_arena_add(&lang->strings, key, key_len, &key_offset) ||
-             !ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
+    else if (!ci18n_arena_add(&lang->strings, key, key_len, &key_offset))
+    {
+        return false;
+    }
+
+    if (unescape)
+    {
+        if (!ci18n_arena_add_unescaped(&lang->strings, value, value_len, &value_offset))
+        {
+            return false;
+        }
+    }
+    else if (!ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
     {
         return false;
     }
@@ -1977,6 +2008,56 @@ CI18N_DEF bool ci18n_clear(const char *language_code)
             lang->buckets[i] = CI18N_NO_INDEX;
         }
     }
+
+    ci18n_succeed();
+    return true;
+}
+
+CI18N_DEF bool ci18n_remove_language(const char *language_code)
+{
+    int lang_idx;
+    size_t last;
+
+    if (!ci18n_ctx.initialized)
+    {
+        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code)
+    {
+        return ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    lang_idx = ci18n_find_language(language_code);
+    if (lang_idx < 0)
+    {
+        return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+    }
+
+    /* Pointing at a language that no longer exists would be worse than
+     * pointing at nothing, so drop the selection first. */
+    if (strcmp(ci18n_ctx.current_language, language_code) == 0)
+    {
+        ci18n_ctx.current_language[0] = '\0';
+    }
+    if (strcmp(ci18n_ctx.fallback_language, language_code) == 0)
+    {
+        ci18n_ctx.fallback_language[0] = '\0';
+    }
+
+    ci18n_lang_release(&ci18n_ctx.languages[lang_idx]);
+
+    /* Move the last language into the hole. Languages are found by scanning
+     * for the code rather than by index, so nothing holds a stale one, and
+     * this avoids shifting the rest. */
+    last = ci18n_ctx.language_count - 1;
+    if ((size_t)lang_idx != last)
+    {
+        ci18n_ctx.languages[lang_idx] = ci18n_ctx.languages[last];
+        memset(&ci18n_ctx.languages[last], 0, sizeof(ci18n_language_t));
+    }
+
+    ci18n_ctx.language_count--;
 
     ci18n_succeed();
     return true;

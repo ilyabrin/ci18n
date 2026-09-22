@@ -1286,6 +1286,88 @@ TEST(test_plural_guards)
     ci18n_free();
 }
 
+TEST(test_remove_language_frees_the_slot)
+{
+    char code[CI18N_MAX_CODE_LENGTH];
+    size_t i;
+
+    ci18n_init();
+
+    ci18n_set("en", "k", "english");
+    ci18n_set("ru", "k", "russian");
+    ci18n_set("es", "k", "spanish");
+    ASSERT(ci18n_get_languages(NULL, 0) == 3);
+
+    ASSERT(ci18n_remove_language("ru") == true);
+    ASSERT(ci18n_get_languages(NULL, 0) == 2);
+    ASSERT(ci18n_count("ru") == 0);
+
+    /* The survivors are still findable after the last one moved into the
+     * hole, which is the part a shift would have got wrong. */
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("k"), "english");
+    ci18n_set_current("es");
+    ASSERT_STR_EQ(ci18n_get("k"), "spanish");
+
+    /* Removing what is not there is a miss, not a corruption. */
+    ASSERT(ci18n_remove_language("ru") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_LANGUAGE_NOT_FOUND);
+
+    /* The slot is genuinely released, unlike ci18n_clear(): filling the
+     * table, removing one and adding another has to work. */
+    ci18n_free();
+    ci18n_init();
+
+    for (i = 0; i < CI18N_MAX_LANGUAGES; i++)
+    {
+        sprintf(code, "l%u", (unsigned int)i);
+        ASSERT(ci18n_set(code, "k", "v") == true);
+    }
+
+    ASSERT(ci18n_set("overflow", "k", "v") == false);
+    ASSERT(ci18n_remove_language("l0") == true);
+    ASSERT(ci18n_set("overflow", "k", "v") == true);
+    ASSERT(ci18n_get_languages(NULL, 0) == CI18N_MAX_LANGUAGES);
+
+    ci18n_free();
+}
+
+TEST(test_remove_language_clears_the_selection)
+{
+    ci18n_init();
+
+    ci18n_set("en", "k", "english");
+    ci18n_set("ru", "k", "russian");
+    ci18n_set_current("ru");
+    ci18n_set_fallback("en");
+
+    ASSERT(ci18n_remove_language("ru") == true);
+
+    /* Pointing at a language that no longer exists would be worse than
+     * pointing at nothing. */
+    ASSERT_STR_EQ(ci18n_get_current(), "");
+
+    /* The fallback still answers, since it was a different language. */
+    ASSERT_STR_EQ(ci18n_get("k"), "english");
+
+    ASSERT(ci18n_remove_language("en") == true);
+    ASSERT(ci18n_get("k") == NULL);
+    ASSERT(ci18n_get_languages(NULL, 0) == 0);
+
+    ci18n_free();
+}
+
+TEST(test_remove_language_guards)
+{
+    ASSERT(ci18n_remove_language("en") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_NOT_INITIALIZED);
+
+    ci18n_init();
+    ASSERT(ci18n_remove_language(NULL) == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
+    ci18n_free();
+}
+
 /* ============================================================================
  * Escape sequences
  *
@@ -1335,6 +1417,23 @@ TEST(test_escaped_separator_in_key)
     ASSERT_STR_EQ(ci18n_get("we=ird"), "value");
     ASSERT(ci18n_get("we\\=ird") == NULL);
     ASSERT_STR_EQ(ci18n_get("plain"), "other");
+
+    ci18n_free();
+}
+
+TEST(test_escapes_in_key_and_value_together)
+{
+    const char *buffer = "we\\=ird=a\\nb\nplain\\=key=x\\ty\n";
+
+    ci18n_init();
+    ASSERT(ci18n_load_from_buffer("en", buffer, strlen(buffer)) == true);
+    ci18n_set_current("en");
+
+    /* Decoding the key used to switch decoding off for its own value,
+     * because one flag was doing both jobs. Nothing caught it until a real
+     * .po file arrived with escapes on both sides of the separator. */
+    ASSERT_STR_EQ(ci18n_get("we=ird"), "a\nb");
+    ASSERT_STR_EQ(ci18n_get("plain=key"), "x\ty");
 
     ci18n_free();
 }
@@ -2114,8 +2213,13 @@ int main(void)
     RUN_TEST(test_plural_falls_back_through_other_then_plain);
     RUN_TEST(test_plural_guards);
 
+    RUN_TEST(test_remove_language_frees_the_slot);
+    RUN_TEST(test_remove_language_clears_the_selection);
+    RUN_TEST(test_remove_language_guards);
+
     RUN_TEST(test_escapes_in_values);
     RUN_TEST(test_escaped_separator_in_key);
+    RUN_TEST(test_escapes_in_key_and_value_together);
     RUN_TEST(test_escaped_comment_markers);
     RUN_TEST(test_escaped_space_survives_trimming);
     RUN_TEST(test_unknown_escape_is_left_alone);

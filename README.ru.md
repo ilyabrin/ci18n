@@ -105,6 +105,31 @@ farewell=До свидания!
 error=Произошла ошибка
 ```
 
+## Переход с gettext
+
+`tools/po2ci18n.py` превращает каталог `.po` в файл перевода ci18n:
+
+```bash
+tools/po2ci18n.py ru.po -o translations/ru.txt
+tools/po2ci18n.py --keys=slug ru.po -o translations/ru.txt
+```
+
+Он понимает экранирование и переносы длинных записей, которые пишет gettext,
+раскладывает `msgid_plural` с его индексными `msgstr[0]` и `msgstr[1]` по
+именам категорий CLDR, превращает `msgctxt` в префикс ключа и пропускает
+записи fuzzy, непереведённые и устаревшие. `--keys=slug` превращает
+английские предложения в короткие идентификаторы, что снимает ограничение
+`CI18N_MAX_KEY_LENGTH`.
+
+Читателя `.po` внутри библиотеки нет сознательно. Полный это около 700
+строк, из них 300 на вычислитель выражения на C, которое gettext кладёт в
+заголовок Plural-Forms. Это удвоило бы поверхность разбора у библиотеки, смысл
+которой в одном небольшом заголовке. Конвертация на этапе сборки вычисляет
+это выражение на вашей машине, а не на устройстве.
+
+`make test-po` прогоняет конвертер по образцовому каталогу и загружает результат
+обратно, чтобы он не сломался незамеченным.
+
 ## Экранирование
 
 Значение иначе берётся буквально, поэтому только так можно положить в
@@ -361,8 +386,8 @@ puts(greeting);                           /* висячий указатель *
 ### Проверка версии
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 3, 0)
-#error "ci18n 2.3.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 4, 0)
+#error "ci18n 2.4.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -384,6 +409,7 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_set(lang, key, value)`            | Добавить перевод         |
 | `ci18n_remove(lang, key)`                | Удалить перевод          |
 | `ci18n_clear(lang)`                      | Очистить язык            |
+| `ci18n_remove_language(lang)`            | Выгрузить язык и освободить слот |
 | `ci18n_count(lang)`                      | Количество записей       |
 | `ci18n_get_languages(out, cap)`          | Список языков            |
 | `ci18n_last_error()`                     | Почему упал последний вызов |
@@ -416,7 +442,7 @@ single-header библиотеки и существуют, и это вполн
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.3.0)
+  GIT_TAG v2.4.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

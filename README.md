@@ -105,6 +105,30 @@ farewell=Goodbye!
 error=An error occurred
 ```
 
+## Coming from gettext
+
+`tools/po2ci18n.py` converts a `.po` catalogue into a ci18n translation file:
+
+```bash
+tools/po2ci18n.py ru.po -o translations/ru.txt
+tools/po2ci18n.py --keys=slug ru.po -o translations/ru.txt
+```
+
+It handles escapes and the wrapped continuation lines gettext writes, maps
+`msgid_plural` and its indexed `msgstr[0]`, `msgstr[1]` onto CLDR category
+names, turns `msgctxt` into a key prefix, and skips fuzzy, untranslated and
+obsolete entries. `--keys=slug` turns English sentences into short
+identifiers, which avoids `CI18N_MAX_KEY_LENGTH`.
+
+There is deliberately no `.po` reader in the library. A full one is around 700
+lines, 300 of them an evaluator for the C expression gettext puts in its
+Plural-Forms header, which would double the parse surface of a library whose
+point is one small header. Converting at build time evaluates that expression
+on your machine rather than on the device.
+
+`make test-po` runs the converter over a sample catalogue and loads the result
+back, so it stays correct.
+
 ## Escape sequences
 
 A value is otherwise taken literally, so these are the way to put a line break
@@ -357,8 +381,8 @@ it if you need to hold on to it.
 ### Version check
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 3, 0)
-#error "ci18n 2.3.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 4, 0)
+#error "ci18n 2.4.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -380,6 +404,7 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_set(lang, key, value)`            | Add translation       |
 | `ci18n_remove(lang, key)`                | Remove translation    |
 | `ci18n_clear(lang)`                      | Clear language        |
+| `ci18n_remove_language(lang)`            | Unload it and free the slot |
 | `ci18n_count(lang)`                      | Entry count           |
 | `ci18n_get_languages(out, cap)`          | List of languages     |
 | `ci18n_last_error()`                     | Why the last call failed |
@@ -412,7 +437,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.3.0)
+  GIT_TAG v2.4.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

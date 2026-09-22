@@ -72,6 +72,22 @@ jobs:
       - name: Run example
         run: ./example
 
+  # tools/po2ci18n.py lives outside the library, so nothing would notice it
+  # rotting. This converts a sample catalogue and loads the result back, which
+  # is how the escape decoding bug in 2.3.0 was found.
+  po-converter:
+    name: po converter round trip
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc make python3
+
+      - name: Convert and load back
+        run: make test-po
+
   # CI18N_THREAD_LOCAL_CONTEXT is a compile-time branch, so it needs its own
   # build to be covered at all. The deprecated spelling is built too, because
   # the alias has to keep working.

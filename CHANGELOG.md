@@ -8,10 +8,51 @@ Because this is a single-header library, upgrading means replacing one file.
 Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 3, 0)
-#error "ci18n 2.3.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 4, 0)
+#error "ci18n 2.4.0 or newer is required"
 #endif
 ```
+
+## 2.4.0 - 2026-09-22
+
+Unloading languages, and a converter for gettext catalogues.
+
+### Added
+
+- `ci18n_remove_language()` unloads a language entirely, freeing its memory
+  and releasing its slot. `ci18n_clear()` empties a language but keeps it
+  loaded, so a program switching between many languages over a long run would
+  eventually fill `CI18N_MAX_LANGUAGES` with empty ones. If the language being
+  removed is the current or the fallback one, that selection is cleared:
+  pointing at a language that no longer exists is worse than pointing at
+  nothing.
+
+- `tools/po2ci18n.py` converts a gettext `.po` catalogue into a ci18n
+  translation file. It handles msgid and msgstr with C escapes and the
+  adjacent-string continuation gettext uses for long entries, msgid_plural
+  with its indexed forms mapped onto CLDR category names, msgctxt as a key
+  prefix, and it skips fuzzy, untranslated and obsolete entries.
+
+  A converter rather than a `.po` reader in the header: a full reader is
+  around 700 lines, 300 of them an evaluator for the C expression in gettext's
+  Plural-Forms header, which would double the parse and fuzz surface of a
+  library whose point is one small header. Converting offline also evaluates
+  that expression on a development machine rather than on a device, and lets
+  keys be renamed from English sentences into identifiers with `--keys=slug`.
+
+- `make test-po` converts a sample catalogue and loads the result back, so the
+  converter cannot rot unnoticed. It runs in CI.
+
+### Fixed
+
+- **Escape decoding was switched off for the value of any entry whose key
+  contained a backslash.** One flag was doing two jobs: marking the key as
+  already decoded also stopped the value being decoded. So `we\\=ird=a\\nb`
+  stored a literal `a\\nb` rather than a line break.
+
+  The unit tests missed it because none of them had escapes on both sides of
+  the separator at once. The round trip through a real `.po` file caught it on
+  its first run, which is the argument for keeping that check in CI.
 
 ## 2.3.0 - 2026-09-22
 

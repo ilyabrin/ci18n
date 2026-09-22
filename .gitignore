@@ -29,6 +29,9 @@ fuzz_load_buffer
 fuzz_load_buffer.exe
 fuzz_replay
 fuzz_replay.exe
+test_po_roundtrip
+test_po_roundtrip.exe
+po_roundtrip.txt
 
 # Fuzzing output. tests/fuzz_corpus holds the committed seeds and stays.
 fuzz_findings/
