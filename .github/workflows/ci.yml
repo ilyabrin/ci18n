@@ -201,6 +201,22 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      # A single warning from somebody else's header blocks any project built
+      # with warnings as errors, which is a common setting. So the header has
+      # to stay clean at the strictest level each compiler offers, and that
+      # only stays true if something checks.
+      - name: Build again with warnings as errors
+        run: |
+          if [ "${{ matrix.compiler }}" = "msvc" ]; then
+            cmake -B build-strict -DCMAKE_C_FLAGS="/W4 /WX"
+          else
+            cmake -B build-strict -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
+              -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Werror"
+          fi
+          cmake --build build-strict --config Release
+          ctest --test-dir build-strict -C Release --output-on-failure
+        shell: bash
+
       # Multi-config generators need the configuration naming again here.
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure

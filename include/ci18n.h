@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.6.1
+ * ci18n.h - v2.6.2
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -56,8 +56,8 @@ Second line.
 
 #define CI18N_VERSION_MAJOR 2
 #define CI18N_VERSION_MINOR 6
-#define CI18N_VERSION_PATCH 1
-#define CI18N_VERSION_STRING "2.6.1"
+#define CI18N_VERSION_PATCH 2
+#define CI18N_VERSION_STRING "2.6.2"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -1905,7 +1905,23 @@ static bool ci18n_load_language_impl(ci18n_t *ctx, const char *language_code, co
         return ci18n_fail(ctx, CI18N_ERR_CODE_TOO_LONG);
     }
 
+    /* MSVC deprecates fopen in favour of fopen_s and warns at /W4, which
+     * would stop this header compiling in any project using /WX. Suppressed
+     * around this one line rather than by defining _CRT_SECURE_NO_WARNINGS:
+     * that macro covers the whole translation unit, so the library would be
+     * silencing warnings about the caller's code as well as its own.
+     *
+     * The warning does not apply here in substance. The return value is
+     * checked, and nothing unbounded is written. */
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
     file = fopen(filepath, "r");
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
     if (!file)
     {
         return ci18n_fail(ctx, CI18N_ERR_FILE_NOT_FOUND);

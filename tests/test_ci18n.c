@@ -765,7 +765,7 @@ TEST(test_max_languages)
 
     for (i = 0; i < CI18N_MAX_LANGUAGES; i++)
     {
-        sprintf(code, "l%u", (unsigned int)i);
+        snprintf(code, sizeof(code), "l%u", (unsigned int)i);
         ASSERT(ci18n_set(code, "k", "v") == true);
     }
 
@@ -790,7 +790,7 @@ TEST(test_max_keys_per_language)
 
     for (i = 0; i < CI18N_MAX_KEYS_PER_LANGUAGE; i++)
     {
-        sprintf(key, "k%u", (unsigned int)i);
+        snprintf(key, sizeof(key), "k%u", (unsigned int)i);
         ASSERT(ci18n_set("en", key, "v") == true);
     }
 
@@ -915,8 +915,8 @@ TEST(test_many_keys_all_reachable)
     /* Enough entries to force several bucket growths and real chains. */
     for (i = 0; i < 500; i++)
     {
-        sprintf(key, "key_%d", i);
-        sprintf(value, "value_%d", i);
+        snprintf(key, sizeof(key), "key_%d", i);
+        snprintf(value, sizeof(value), "value_%d", i);
         ASSERT(ci18n_set("en", key, value) == true);
     }
 
@@ -927,8 +927,8 @@ TEST(test_many_keys_all_reachable)
      * would leave the count right and the lookup wrong. */
     for (i = 0; i < 500; i++)
     {
-        sprintf(key, "key_%d", i);
-        sprintf(value, "value_%d", i);
+        snprintf(key, sizeof(key), "key_%d", i);
+        snprintf(value, sizeof(value), "value_%d", i);
         ASSERT_STR_EQ(ci18n_get(key), value);
     }
 
@@ -949,7 +949,7 @@ TEST(test_remove_keeps_the_rest_reachable)
 
     for (i = 0; i < 100; i++)
     {
-        sprintf(key, "key_%d", i);
+        snprintf(key, sizeof(key), "key_%d", i);
         ci18n_set("en", key, "v");
     }
 
@@ -959,7 +959,7 @@ TEST(test_remove_keeps_the_rest_reachable)
      * the bucket chains have to be rebuilt around it each time. */
     for (i = 0; i < 100; i += 2)
     {
-        sprintf(key, "key_%d", i);
+        snprintf(key, sizeof(key), "key_%d", i);
         ASSERT(ci18n_remove("en", key) == true);
     }
 
@@ -967,7 +967,7 @@ TEST(test_remove_keeps_the_rest_reachable)
 
     for (i = 0; i < 100; i++)
     {
-        sprintf(key, "key_%d", i);
+        snprintf(key, sizeof(key), "key_%d", i);
 
         if (i % 2 == 0)
         {
@@ -1026,7 +1026,7 @@ TEST(test_clear_then_reuse)
 
     for (i = 0; i < 50; i++)
     {
-        sprintf(key, "key_%d", i);
+        snprintf(key, sizeof(key), "key_%d", i);
         ci18n_set("en", key, "first round");
     }
 
@@ -1037,7 +1037,7 @@ TEST(test_clear_then_reuse)
      * Everything has to be findable again afterwards. */
     for (i = 0; i < 50; i++)
     {
-        sprintf(key, "key_%d", i);
+        snprintf(key, sizeof(key), "key_%d", i);
         ASSERT(ci18n_set("en", key, "second round") == true);
     }
 
@@ -1046,7 +1046,7 @@ TEST(test_clear_then_reuse)
 
     for (i = 0; i < 50; i++)
     {
-        sprintf(key, "key_%d", i);
+        snprintf(key, sizeof(key), "key_%d", i);
         ASSERT_STR_EQ(ci18n_get(key), "second round");
     }
 
@@ -1320,7 +1320,7 @@ TEST(test_remove_language_frees_the_slot)
 
     for (i = 0; i < CI18N_MAX_LANGUAGES; i++)
     {
-        sprintf(code, "l%u", (unsigned int)i);
+        snprintf(code, sizeof(code), "l%u", (unsigned int)i);
         ASSERT(ci18n_set(code, "k", "v") == true);
     }
 
@@ -2020,7 +2020,7 @@ TEST(test_last_error_limits)
 
     for (i = 0; i < CI18N_MAX_LANGUAGES; i++)
     {
-        sprintf(code, "l%u", (unsigned int)i);
+        snprintf(code, sizeof(code), "l%u", (unsigned int)i);
         ci18n_set(code, "k", "v");
     }
 
@@ -2032,7 +2032,7 @@ TEST(test_last_error_limits)
 
     for (i = 0; i < CI18N_MAX_KEYS_PER_LANGUAGE; i++)
     {
-        sprintf(code, "k%u", (unsigned int)i);
+        snprintf(code, sizeof(code), "k%u", (unsigned int)i);
         ci18n_set("en", code, "v");
     }
 

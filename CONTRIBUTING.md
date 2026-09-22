@@ -19,6 +19,17 @@ Build with warnings as errors before you open a PR, because CI does:
 make clean && make EXTRA_CFLAGS=-Werror
 ```
 
+The header is expected to stay clean at the strictest level each compiler
+offers, `-Wall -Wextra -Wpedantic -Werror` and `/W4 /WX`, in all three
+threading modes. That is not pedantry: one warning from somebody else's header
+blocks any project built with warnings as errors. CI rebuilds that way on
+every compiler.
+
+Where a warning has to be silenced, silence it around the single line that
+causes it, never by defining something like `_CRT_SECURE_NO_WARNINGS`. That
+macro covers the whole translation unit, so the library would be deciding
+warning policy for code it did not write.
+
 Try the other compiler too if you have it. CI covers gcc and clang on Linux and
 macOS, and MinGW gcc on Windows:
 

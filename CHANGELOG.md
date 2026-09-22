@@ -13,6 +13,34 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## 2.6.2 - 2026-09-22
+
+### Fixed
+
+- The header now compiles clean under the strictest warnings each compiler
+  offers, which it did not before: MSVC at `/W4` reported one C4996 for
+  `fopen`, and a single warning from somebody else's header blocks any project
+  built with warnings as errors.
+
+  Suppressed with `#pragma warning(push/disable/pop)` around that one call
+  rather than by defining `_CRT_SECURE_NO_WARNINGS`. That macro covers the
+  whole translation unit, so the library would have been silencing warnings
+  about the caller's code as well as its own. The warning does not apply in
+  substance either: the return value is checked and nothing unbounded is
+  written.
+
+  `fopen_s` was the other option and was rejected: it adds a platform branch
+  to the loader and makes it harder to read, for no gain in safety.
+
+- The test suite used `sprintf`, which MSVC also deprecates. Changed to
+  `snprintf`, so no suppression is needed there at all.
+
+### Added
+
+- A CI step that rebuilds with warnings as errors, `/W4 /WX` on MSVC and
+  `-Wall -Wextra -Wpedantic -Werror` elsewhere, on every compiler. Staying
+  warning-clean is only true for as long as something checks.
+
 ## 2.6.1 - 2026-09-22
 
 ### Fixed
