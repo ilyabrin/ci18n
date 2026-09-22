@@ -37,6 +37,10 @@
 - ✅ Контекст на поток (опционально)
 - ✅ UTF-8 совместимый, BOM в файлах перевода пропускается
 
+Лёгкая не на словах. Три файла перевода по восемь ключей занимают 1600 байт
+в куче, а поиск среди тысячи ключей занимает около 75 нс. До первой записи
+не выделяется ничего.
+
 ## Быстрый старт
 
 ### 1. Подключение
@@ -209,8 +213,8 @@ puts(greeting);                           /* висячий указатель *
 ### Проверка версии
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(1, 1, 0)
-#error "ci18n 1.1.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
+#error "ci18n 2.0.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -256,7 +260,7 @@ single-header библиотеки и существуют, и это вполн
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v1.0.0)
+  GIT_TAG v2.0.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)
@@ -271,7 +275,7 @@ cmake --install build --prefix /usr/local
 ```
 
 ```cmake
-find_package(ci18n 1.0 REQUIRED)
+find_package(ci18n 2.0 REQUIRED)
 target_link_libraries(your_target PRIVATE ci18n::ci18n)
 ```
 

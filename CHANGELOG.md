@@ -8,10 +8,68 @@ Because this is a single-header library, upgrading means replacing one file.
 Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(1, 0, 0)
-#error "ci18n 1.0.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
+#error "ci18n 2.0.0 or newer is required"
 #endif
 ```
+
+## 2.0.0 - 2026-09-22
+
+Same API, rebuilt storage. Every function keeps its signature and its
+behaviour; what changed is what the library costs.
+
+### Changed
+
+- **Keys and values are packed into a per-language arena** and referenced by
+  offset instead of living in fixed 256 and 4096 byte fields. An entry is now
+  16 bytes rather than 4352.
+- **Lookups go through a hash table** (FNV-1a, chained, power-of-two buckets,
+  cached hashes) instead of walking every key with `strcmp`.
+- **Nothing is allocated until the first insert.** An untouched language costs
+  only its slot in the context.
+- **The parser no longer copies.** It hands the arena slices of the caller's
+  line, which also removes a 256 byte and a 4096 byte buffer it kept on the
+  stack for every single line.
+- `ci18n_remove()` now moves the last entry into the hole rather than shifting
+  the rest down, so entry order is no longer insertion order. Nothing
+  observable depended on it.
+
+Measured on the same machine, old against new:
+
+| | 1.0.0 | 2.0.0 | |
+| --- | --- | --- | --- |
+| One entry | 4352 B | 16 B | 272x smaller |
+| Three translation files, 24 entries | 835,584 B | 1,600 B | 522x smaller |
+| One full language, 1024 entries | 4,456,448 B | 90,112 B | 49x smaller |
+| One lookup among 1024 keys | 1860 ns | 75 ns | 25x faster |
+| Context, static | 1944 B | 3224 B | 1.3 KB larger |
+
+The context grew because a language descriptor carries three pointers now.
+That is 1.3 KB of static memory against 834 KB of heap saved on a realistic
+load, which is a trade worth making, particularly on the small device this
+library was written for.
+
+### Breaking
+
+Only for code that reached into the structures. `ci18n_entry_t`,
+`ci18n_language_t` and `ci18n_context_t` all changed shape, and
+`ci18n_entry_t` no longer has `.key` and `.value` as arrays. They are visible
+because `ci18n_get_context()` hands the context out, not because their layout
+was ever a promise. Code that only calls the functions needs no changes at
+all: recompiling against the new header is enough.
+
+`<stdint.h>` is now included.
+
+### Verified by
+
+- The 64 unit tests, five of them new and specific to the storage layer:
+  every key reachable after repeated rehashing, removal that keeps the rest
+  findable, values updated both shorter and longer, clear and reuse, and a
+  file loaded twice
+- AddressSanitizer with leak detection, UndefinedBehaviorSanitizer and
+  ThreadSanitizer
+- 3000 randomly generated parser inputs under AddressSanitizer
+- MSVC, gcc and clang, at c99, c11 and c17
 
 ## 1.0.0 - 2026-09-22
 

@@ -896,6 +896,185 @@ TEST(test_long_language_code_is_rejected)
 }
 
 /* ============================================================================
+ * Storage layer
+ *
+ * Keys and values live in a per-language arena and are found through a hash
+ * table. These cover the paths that has no equivalent in a flat array: chain
+ * walking, removal by swapping the last entry into the hole, rewinding the
+ * arena, and updating a value that no longer fits where the old one sat.
+ * ============================================================================ */
+
+TEST(test_many_keys_all_reachable)
+{
+    char key[32];
+    char value[32];
+    int i;
+
+    ci18n_init();
+
+    /* Enough entries to force several bucket growths and real chains. */
+    for (i = 0; i < 500; i++)
+    {
+        sprintf(key, "key_%d", i);
+        sprintf(value, "value_%d", i);
+        ASSERT(ci18n_set("en", key, value) == true);
+    }
+
+    ASSERT(ci18n_count("en") == 500);
+    ci18n_set_current("en");
+
+    /* Every one of them, not just the last: a rehash that dropped an entry
+     * would leave the count right and the lookup wrong. */
+    for (i = 0; i < 500; i++)
+    {
+        sprintf(key, "key_%d", i);
+        sprintf(value, "value_%d", i);
+        ASSERT_STR_EQ(ci18n_get(key), value);
+    }
+
+    /* Keys that were never added must still miss. */
+    ASSERT(ci18n_get("key_500") == NULL);
+    ASSERT(ci18n_get("key_") == NULL);
+    ASSERT(ci18n_get("") == NULL);
+
+    ci18n_free();
+}
+
+TEST(test_remove_keeps_the_rest_reachable)
+{
+    char key[32];
+    int i;
+
+    ci18n_init();
+
+    for (i = 0; i < 100; i++)
+    {
+        sprintf(key, "key_%d", i);
+        ci18n_set("en", key, "v");
+    }
+
+    ci18n_set_current("en");
+
+    /* Remove every other key. Removal moves the last entry into the hole, so
+     * the bucket chains have to be rebuilt around it each time. */
+    for (i = 0; i < 100; i += 2)
+    {
+        sprintf(key, "key_%d", i);
+        ASSERT(ci18n_remove("en", key) == true);
+    }
+
+    ASSERT(ci18n_count("en") == 50);
+
+    for (i = 0; i < 100; i++)
+    {
+        sprintf(key, "key_%d", i);
+
+        if (i % 2 == 0)
+        {
+            ASSERT(ci18n_get(key) == NULL);
+        }
+        else
+        {
+            ASSERT(ci18n_get(key) != NULL);
+        }
+    }
+
+    /* Removing the same key twice is a miss, not a corruption. */
+    ASSERT(ci18n_remove("en", "key_0") == false);
+    ASSERT(ci18n_count("en") == 50);
+
+    /* And the table still accepts new entries afterwards. */
+    ASSERT(ci18n_set("en", "added_after", "v") == true);
+    ASSERT_STR_EQ(ci18n_get("added_after"), "v");
+
+    ci18n_free();
+}
+
+TEST(test_value_update_shorter_and_longer)
+{
+    ci18n_init();
+    ci18n_set_current("en");
+
+    ASSERT(ci18n_set("en", "k", "medium length") == true);
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("k"), "medium length");
+
+    /* Shorter fits where the old value sat and is written in place. */
+    ASSERT(ci18n_set("en", "k", "short") == true);
+    ASSERT_STR_EQ(ci18n_get("k"), "short");
+
+    /* Longer cannot, so it is appended and the entry repointed. */
+    ASSERT(ci18n_set("en", "k", "a considerably longer replacement value") == true);
+    ASSERT_STR_EQ(ci18n_get("k"), "a considerably longer replacement value");
+
+    /* Back to short again, and a neighbour must be untouched throughout. */
+    ci18n_set("en", "neighbour", "intact");
+    ASSERT(ci18n_set("en", "k", "s") == true);
+    ASSERT_STR_EQ(ci18n_get("k"), "s");
+    ASSERT_STR_EQ(ci18n_get("neighbour"), "intact");
+    ASSERT(ci18n_count("en") == 2);
+
+    ci18n_free();
+}
+
+TEST(test_clear_then_reuse)
+{
+    char key[32];
+    int i;
+
+    ci18n_init();
+
+    for (i = 0; i < 50; i++)
+    {
+        sprintf(key, "key_%d", i);
+        ci18n_set("en", key, "first round");
+    }
+
+    ASSERT(ci18n_clear("en") == true);
+    ASSERT(ci18n_count("en") == 0);
+
+    /* Clearing rewinds the arena, so the second round writes over the first.
+     * Everything has to be findable again afterwards. */
+    for (i = 0; i < 50; i++)
+    {
+        sprintf(key, "key_%d", i);
+        ASSERT(ci18n_set("en", key, "second round") == true);
+    }
+
+    ASSERT(ci18n_count("en") == 50);
+    ci18n_set_current("en");
+
+    for (i = 0; i < 50; i++)
+    {
+        sprintf(key, "key_%d", i);
+        ASSERT_STR_EQ(ci18n_get(key), "second round");
+    }
+
+    ci18n_free();
+}
+
+TEST(test_reload_same_file_twice)
+{
+    ci18n_init();
+
+    ASSERT(write_text(TEMP_FILE, "a=one\nb=two\nc=three\n"));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 3);
+
+    /* A second load of identical content updates every value in place and
+     * must not duplicate a single entry. */
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+    ASSERT(ci18n_count("en") == 3);
+
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("a"), "one");
+    ASSERT_STR_EQ(ci18n_get("c"), "three");
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+/* ============================================================================
  * Diagnostics
  * ============================================================================ */
 
@@ -1287,6 +1466,12 @@ int main(void)
     RUN_TEST(test_long_value_is_truncated);
     RUN_TEST(test_language_code_at_the_limit);
     RUN_TEST(test_long_language_code_is_rejected);
+
+    RUN_TEST(test_many_keys_all_reachable);
+    RUN_TEST(test_remove_keeps_the_rest_reachable);
+    RUN_TEST(test_value_update_shorter_and_longer);
+    RUN_TEST(test_clear_then_reuse);
+    RUN_TEST(test_reload_same_file_twice);
 
     RUN_TEST(test_error_string_covers_every_code);
     RUN_TEST(test_last_error_before_init);

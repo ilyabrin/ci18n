@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.14)
 project(ci18n_find_package_consumer LANGUAGES C)
 
-find_package(ci18n 1.0 REQUIRED)
+find_package(ci18n 2.0 REQUIRED)
 
 add_executable(consumer ../consumer.c)
 target_link_libraries(consumer PRIVATE ci18n::ci18n)

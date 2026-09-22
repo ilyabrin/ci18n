@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v1.0.0
+ * ci18n.h - v2.0.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -8,6 +8,7 @@
  *   - UTF-8 string handling, BOM tolerant
  *   - Thread-local context option
  *   - No external dependencies, C99 and newer
+ *   - Packed storage: an entry costs 16 bytes, not 4352
  *
  * USAGE:
  *   #define CI18N_IMPLEMENTATION before including this header in ONE source file
@@ -40,19 +41,20 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 /* ============================================================================
  * Version
  * ============================================================================ */
 
-#define CI18N_VERSION_MAJOR 1
+#define CI18N_VERSION_MAJOR 2
 #define CI18N_VERSION_MINOR 0
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "1.0.0"
+#define CI18N_VERSION_STRING "2.0.0"
 
 /* Compare against this to require a minimum version at compile time:
- *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(1, 1, 0)
- *   #error "ci18n 1.1.0 or newer is required"
+ *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
+ *   #error "ci18n 2.0.0 or newer is required"
  *   #endif
  */
 #define CI18N_VERSION_NUMBER(major, minor, patch) ((major) * 10000 + (minor) * 100 + (patch))
@@ -134,18 +136,49 @@ extern "C"
      * Types
      * ============================================================================ */
 
+    /* ------------------------------------------------------------------------
+     * Storage internals
+     * ------------------------------------------------------------------------
+     *
+     * These types are visible because ci18n_get_context() hands the context
+     * out, not because their layout is part of the API. Reach for the
+     * functions instead: the shapes here changed once already and may again.
+     *
+     * Keys and values live packed in a per-language arena and are referenced
+     * by offset rather than by pointer, so growing the arena does not have to
+     * fix anything up. An entry is 16 bytes, against the 4352 a pair of fixed
+     * fields used to cost, and an empty language holds no heap at all until
+     * the first insert.
+     * ------------------------------------------------------------------------ */
+
+    /* Marks "no entry" in a bucket or a chain link. */
+#define CI18N_NO_INDEX UINT32_MAX
+
+    /* Packed, NUL-terminated strings addressed by offset. */
+    typedef struct ci18n_arena
+    {
+        char *data;
+        size_t used;
+        size_t capacity;
+    } ci18n_arena_t;
+
     typedef struct ci18n_entry
     {
-        char key[CI18N_MAX_KEY_LENGTH];
-        char value[CI18N_MAX_VALUE_LENGTH];
+        uint32_t key;   /* offset into the language arena */
+        uint32_t value; /* offset into the language arena */
+        uint32_t hash;  /* cached hash of the key, to skip most strcmp calls */
+        uint32_t next;  /* next entry in this bucket's chain, or CI18N_NO_INDEX */
     } ci18n_entry_t;
 
     typedef struct ci18n_language
     {
         char code[CI18N_MAX_CODE_LENGTH];
-        ci18n_entry_t *entries;
+        ci18n_arena_t strings;
+        ci18n_entry_t *entries; /* dense, in insertion order */
+        uint32_t *buckets;      /* hash bucket to entry index */
         size_t count;
         size_t capacity;
+        size_t bucket_count; /* always a power of two, or zero */
     } ci18n_language_t;
 
     /*
@@ -204,11 +237,15 @@ extern "C"
      * into a copy you own. Such a pointer stays valid only until the next call
      * that mutates the language it came from:
      *
-     *   ci18n_set(), ci18n_remove(), ci18n_load_language() and
-     *   ci18n_load_from_buffer() may reallocate the entry array
+     *   ci18n_set(), ci18n_load_language() and ci18n_load_from_buffer() may
+     *   grow the string arena, which moves every key and value of that
+     *   language at once, not only the one being written
      *
      *   ci18n_clear(), ci18n_free() and ci18n_set_current() invalidate
      *   pointers outright
+     *
+     *   ci18n_remove() leaves the arena alone, so other pointers survive it,
+     *   but do not rely on that: it is an implementation detail
      *
      * So this is a use-after-free:
      *
@@ -446,9 +483,6 @@ extern "C"
 #include <stdlib.h>
 #include <string.h>
 
-/* Internal helper macros */
-#define CI18N_MIN(a, b) ((a) < (b) ? (a) : (b))
-
 #ifdef CI18N_THREAD_LOCAL_CONTEXT
 /* Pick the storage keyword by compiler, not by OS.
  *
@@ -500,35 +534,6 @@ static void ci18n_copy(char *dst, size_t cap, const char *src)
     dst[len] = '\0';
 }
 
-/* Trim leading and trailing whitespace in-place */
-static void ci18n_trim(char *str)
-{
-    char *start = str;
-    char *end;
-    size_t len;
-
-    /* Trim leading space */
-    while (ci18n_is_space(*start))
-        start++;
-
-    /* All spaces? */
-    if (*start == 0)
-    {
-        str[0] = '\0';
-        return;
-    }
-
-    /* Trim trailing space */
-    end = start + strlen(start) - 1;
-    while (end > start && ci18n_is_space(*end))
-        end--;
-
-    /* Write new null terminator */
-    len = (size_t)(end - start + 1);
-    memmove(str, start, len);
-    str[len] = '\0';
-}
-
 /* Record a failure and return false, so callers stay one line per check */
 static bool ci18n_fail(ci18n_error_t error)
 {
@@ -555,6 +560,308 @@ static bool ci18n_code_fits(const char *code)
     return strlen(code) < CI18N_MAX_CODE_LENGTH;
 }
 
+/* ============================================================================
+ * Storage: a string arena plus a hash table, per language
+ * ============================================================================ */
+
+/*
+ * FNV-1a, 32 bit. Chosen for being about ten lines and good enough for short
+ * ASCII keys, which is what translation keys are.
+ */
+static uint32_t ci18n_hash(const char *key, size_t len)
+{
+    uint32_t h = 2166136261u;
+    size_t i;
+
+    for (i = 0; i < len; i++)
+    {
+        h ^= (uint32_t)(unsigned char)key[i];
+        h *= 16777619u;
+    }
+
+    return h;
+}
+
+/* Make room for `need` more bytes in the arena, doubling as it grows. */
+static bool ci18n_arena_reserve(ci18n_arena_t *arena, size_t need)
+{
+    size_t capacity = arena->capacity;
+    char *data;
+
+    if (arena->used + need <= capacity)
+    {
+        return true;
+    }
+
+    if (capacity == 0)
+    {
+        capacity = 256;
+    }
+
+    while (capacity < arena->used + need)
+    {
+        capacity *= 2;
+    }
+
+    data = (char *)realloc(arena->data, capacity);
+    if (!data)
+    {
+        return ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
+    }
+
+    arena->data = data;
+    arena->capacity = capacity;
+    return true;
+}
+
+/*
+ * Copy a string into the arena and return its offset.
+ *
+ * Offsets rather than pointers precisely so that growing the arena costs
+ * nothing: a realloc moves every string at once and no stored reference has
+ * to be corrected.
+ */
+static bool ci18n_arena_add(ci18n_arena_t *arena, const char *text, size_t len,
+                            uint32_t *out_offset)
+{
+    if (!ci18n_arena_reserve(arena, len + 1))
+    {
+        return false;
+    }
+
+    *out_offset = (uint32_t)arena->used;
+    memcpy(arena->data + arena->used, text, len);
+    arena->data[arena->used + len] = '\0';
+    arena->used += len + 1;
+    return true;
+}
+
+static const char *ci18n_arena_at(const ci18n_arena_t *arena, uint32_t offset)
+{
+    return arena->data + offset;
+}
+
+/* Link every entry into its bucket from scratch, after the table resized. */
+static void ci18n_rebuild_buckets(ci18n_language_t *lang)
+{
+    size_t mask = lang->bucket_count - 1;
+    size_t i;
+
+    for (i = 0; i < lang->bucket_count; i++)
+    {
+        lang->buckets[i] = CI18N_NO_INDEX;
+    }
+
+    for (i = 0; i < lang->count; i++)
+    {
+        size_t bucket = lang->entries[i].hash & mask;
+
+        lang->entries[i].next = lang->buckets[bucket];
+        lang->buckets[bucket] = (uint32_t)i;
+    }
+}
+
+/*
+ * Grow the bucket array when the table gets crowded.
+ *
+ * Kept at or below a load factor of 0.75, which keeps chains at a couple of
+ * entries. Bucket counts are powers of two so the modulo is a mask.
+ */
+static bool ci18n_ensure_buckets(ci18n_language_t *lang, size_t wanted)
+{
+    size_t bucket_count = lang->bucket_count;
+    uint32_t *buckets;
+
+    if (bucket_count > 0 && wanted * 4 <= bucket_count * 3)
+    {
+        return true;
+    }
+
+    if (bucket_count == 0)
+    {
+        bucket_count = 16;
+    }
+
+    while (wanted * 4 > bucket_count * 3)
+    {
+        bucket_count *= 2;
+    }
+
+    buckets = (uint32_t *)realloc(lang->buckets, sizeof(uint32_t) * bucket_count);
+    if (!buckets)
+    {
+        return ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
+    }
+
+    lang->buckets = buckets;
+    lang->bucket_count = bucket_count;
+    ci18n_rebuild_buckets(lang);
+    return true;
+}
+
+/* Make room for one more entry, doubling as it grows. */
+static bool ci18n_ensure_capacity(ci18n_language_t *lang)
+{
+    size_t capacity = lang->capacity;
+    ci18n_entry_t *entries;
+
+    if (lang->count < capacity)
+    {
+        return true;
+    }
+
+    if (lang->count >= CI18N_MAX_KEYS_PER_LANGUAGE)
+    {
+        return ci18n_fail(CI18N_ERR_TOO_MANY_KEYS);
+    }
+
+    capacity = capacity == 0 ? 8 : capacity * 2;
+    if (capacity > CI18N_MAX_KEYS_PER_LANGUAGE)
+    {
+        capacity = CI18N_MAX_KEYS_PER_LANGUAGE;
+    }
+
+    entries = (ci18n_entry_t *)realloc(lang->entries, sizeof(ci18n_entry_t) * capacity);
+    if (!entries)
+    {
+        return ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
+    }
+
+    lang->entries = entries;
+    lang->capacity = capacity;
+    return true;
+}
+
+/*
+ * Find an entry by key, by length rather than by NUL, so the parser can look
+ * up a slice of its line buffer without copying it out first.
+ *
+ * Returns the entry index, or -1. The cached hash filters out almost every
+ * candidate before strcmp is reached.
+ */
+static int ci18n_find_entry_n(ci18n_language_t *lang, const char *key, size_t key_len,
+                              uint32_t hash)
+{
+    uint32_t index;
+
+    if (lang->bucket_count == 0)
+    {
+        return -1;
+    }
+
+    index = lang->buckets[hash & (lang->bucket_count - 1)];
+
+    while (index != CI18N_NO_INDEX)
+    {
+        ci18n_entry_t *entry = &lang->entries[index];
+
+        if (entry->hash == hash)
+        {
+            const char *stored = ci18n_arena_at(&lang->strings, entry->key);
+
+            if (strncmp(stored, key, key_len) == 0 && stored[key_len] == '\0')
+            {
+                return (int)index;
+            }
+        }
+
+        index = entry->next;
+    }
+
+    return -1;
+}
+
+static int ci18n_find_entry(ci18n_language_t *lang, const char *key)
+{
+    size_t len = strlen(key);
+
+    return ci18n_find_entry_n(lang, key, len, ci18n_hash(key, len));
+}
+
+/*
+ * Add or update one entry, taking both strings as slices.
+ *
+ * On update the new value is written over the old one when it fits, which
+ * covers the common case of re-loading a file. When it does not fit, the new
+ * value is appended and the old bytes stay in the arena as dead weight until
+ * the language is cleared.
+ */
+static bool ci18n_lang_set(ci18n_language_t *lang,
+                           const char *key, size_t key_len,
+                           const char *value, size_t value_len)
+{
+    uint32_t hash = ci18n_hash(key, key_len);
+    uint32_t key_offset;
+    uint32_t value_offset;
+    ci18n_entry_t *entry;
+    size_t bucket;
+    int existing = ci18n_find_entry_n(lang, key, key_len, hash);
+
+    if (existing >= 0)
+    {
+        entry = &lang->entries[existing];
+
+        if (strlen(ci18n_arena_at(&lang->strings, entry->value)) >= value_len)
+        {
+            char *slot = lang->strings.data + entry->value;
+
+            memcpy(slot, value, value_len);
+            slot[value_len] = '\0';
+            return true;
+        }
+
+        if (!ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
+        {
+            return false;
+        }
+
+        /* The arena may have moved, but offsets are stable, so only this one
+         * field needs updating. */
+        lang->entries[existing].value = value_offset;
+        return true;
+    }
+
+    if (!ci18n_ensure_capacity(lang))
+    {
+        return false;
+    }
+
+    if (!ci18n_ensure_buckets(lang, lang->count + 1))
+    {
+        return false;
+    }
+
+    if (!ci18n_arena_add(&lang->strings, key, key_len, &key_offset))
+    {
+        return false;
+    }
+
+    if (!ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
+    {
+        return false;
+    }
+
+    bucket = hash & (lang->bucket_count - 1);
+    entry = &lang->entries[lang->count];
+    entry->key = key_offset;
+    entry->value = value_offset;
+    entry->hash = hash;
+    entry->next = lang->buckets[bucket];
+    lang->buckets[bucket] = (uint32_t)lang->count;
+    lang->count++;
+
+    return true;
+}
+
+/* Release everything one language holds. */
+static void ci18n_lang_release(ci18n_language_t *lang)
+{
+    free(lang->strings.data);
+    free(lang->entries);
+    free(lang->buckets);
+    memset(lang, 0, sizeof(*lang));
+}
+
 /* Find language by code, returns index or -1 if not found */
 static int ci18n_find_language(const char *code)
 {
@@ -569,21 +876,14 @@ static int ci18n_find_language(const char *code)
     return -1;
 }
 
-/* Find entry by key in language, returns index or -1 if not found */
-static int ci18n_find_entry(ci18n_language_t *lang, const char *key)
-{
-    size_t i;
-    for (i = 0; i < lang->count; i++)
-    {
-        if (strcmp(lang->entries[i].key, key) == 0)
-        {
-            return (int)i;
-        }
-    }
-    return -1;
-}
-
-/* Get or create language */
+/*
+ * Get or create a language.
+ *
+ * Nothing is allocated here: an untouched language costs only its slot in the
+ * context, and the arena, entries and buckets appear on first insert. That
+ * matters on a device where the old fixed layout claimed 272 KB before
+ * storing a single translation.
+ */
 static ci18n_language_t *ci18n_get_or_create_language(const char *code)
 {
     int idx = ci18n_find_language(code);
@@ -603,60 +903,11 @@ static ci18n_language_t *ci18n_get_or_create_language(const char *code)
     lang = &ci18n_ctx.languages[ci18n_ctx.language_count];
     memset(lang, 0, sizeof(ci18n_language_t));
     ci18n_copy(lang->code, sizeof(lang->code), code);
-
-    /* Allocate the initial entries array.
-     *
-     * Capacity is only published once the allocation succeeds: otherwise
-     * ci18n_ensure_capacity() would see room in a NULL array and let the
-     * caller write through a null pointer. */
-    lang->entries = (ci18n_entry_t *)malloc(sizeof(ci18n_entry_t) * 64);
-    if (!lang->entries)
-    {
-        ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
-        return NULL;
-    }
-
-    lang->capacity = 64;
-    lang->count = 0;
     ci18n_ctx.language_count++;
 
     return lang;
 }
 
-/* Ensure capacity for entries */
-static bool ci18n_ensure_capacity(ci18n_language_t *lang)
-{
-    ci18n_entry_t *new_entries;
-    size_t new_capacity;
-
-    if (lang->count < lang->capacity)
-    {
-        return true;
-    }
-
-    if (lang->count >= CI18N_MAX_KEYS_PER_LANGUAGE)
-    {
-        return ci18n_fail(CI18N_ERR_TOO_MANY_KEYS);
-    }
-
-    new_capacity = lang->capacity * 2;
-    if (new_capacity > CI18N_MAX_KEYS_PER_LANGUAGE)
-    {
-        new_capacity = CI18N_MAX_KEYS_PER_LANGUAGE;
-    }
-
-    new_entries = (ci18n_entry_t *)realloc(lang->entries, sizeof(ci18n_entry_t) * new_capacity);
-    if (!new_entries)
-    {
-        return ci18n_fail(CI18N_ERR_OUT_OF_MEMORY);
-    }
-
-    lang->entries = new_entries;
-    lang->capacity = new_capacity;
-    return true;
-}
-
-/* Parse a single line */
 /* What one line turned into, so a loader can keep count */
 typedef enum ci18n_line_result
 {
@@ -666,15 +917,42 @@ typedef enum ci18n_line_result
     CI18N_LINE_FAILED     /* out of room or out of memory */
 } ci18n_line_result_t;
 
+/* Trim a slice in place by moving its ends, rather than copying it out. */
+static void ci18n_trim_slice(const char **text, size_t *len)
+{
+    const char *start = *text;
+    size_t n = *len;
+
+    while (n > 0 && ci18n_is_space(*start))
+    {
+        start++;
+        n--;
+    }
+
+    while (n > 0 && ci18n_is_space(start[n - 1]))
+    {
+        n--;
+    }
+
+    *text = start;
+    *len = n;
+}
+
+/*
+ * Parse one line straight out of the caller's buffer.
+ *
+ * Nothing is copied here: the key and the value are handed to the arena as
+ * slices. The previous version kept a 256 byte and a 4096 byte buffer on the
+ * stack for every line, which is a lot to ask of a small device for a parser
+ * that never needed either.
+ */
 static ci18n_line_result_t ci18n_parse_line(ci18n_language_t *lang, const char *line)
 {
     const char *eq;
-    char key[CI18N_MAX_KEY_LENGTH];
-    char value[CI18N_MAX_VALUE_LENGTH];
-    ci18n_entry_t *entry;
-    int existing;
+    const char *key;
+    const char *value;
     size_t key_len;
-    size_t raw_key_len;
+    size_t value_len;
 
     /* Skip a UTF-8 BOM. Editors on Windows often prepend one, and without this
      * the first key of the file would silently become "\xEF\xBB\xBFkey" and be
@@ -701,50 +979,37 @@ static ci18n_line_result_t ci18n_parse_line(ci18n_language_t *lang, const char *
         return CI18N_LINE_MALFORMED;
     }
 
-    /* Extract key, noting if it did not fit */
-    raw_key_len = (size_t)(eq - line);
-    key_len = CI18N_MIN(raw_key_len, CI18N_MAX_KEY_LENGTH - 1);
-    if (key_len < raw_key_len)
-    {
-        ci18n_ctx.load_stats.keys_truncated++;
-    }
+    key = line;
+    key_len = (size_t)(eq - line);
+    ci18n_trim_slice(&key, &key_len);
 
-    memcpy(key, line, key_len);
-    key[key_len] = '\0';
-    ci18n_trim(key);
-
-    if (strlen(key) == 0)
+    if (key_len == 0)
     {
         return CI18N_LINE_MALFORMED;
     }
 
-    /* Extract value, noting if it did not fit */
-    if (strlen(eq + 1) > CI18N_MAX_VALUE_LENGTH - 1)
+    value = eq + 1;
+    value_len = strlen(value);
+    ci18n_trim_slice(&value, &value_len);
+
+    /* Clamp to the configured limits, counting what had to be cut. Trimming
+     * happens first, so surrounding whitespace never costs a key its tail. */
+    if (key_len > CI18N_MAX_KEY_LENGTH - 1)
     {
+        key_len = CI18N_MAX_KEY_LENGTH - 1;
+        ci18n_ctx.load_stats.keys_truncated++;
+    }
+
+    if (value_len > CI18N_MAX_VALUE_LENGTH - 1)
+    {
+        value_len = CI18N_MAX_VALUE_LENGTH - 1;
         ci18n_ctx.load_stats.values_truncated++;
     }
 
-    ci18n_copy(value, CI18N_MAX_VALUE_LENGTH, eq + 1);
-    ci18n_trim(value);
-
-    /* Check if key already exists */
-    existing = ci18n_find_entry(lang, key);
-    if (existing >= 0)
-    {
-        /* Update existing entry */
-        ci18n_copy(lang->entries[existing].value, CI18N_MAX_VALUE_LENGTH, value);
-        return CI18N_LINE_LOADED;
-    }
-
-    /* Add new entry */
-    if (!ci18n_ensure_capacity(lang))
+    if (!ci18n_lang_set(lang, key, key_len, value, value_len))
     {
         return CI18N_LINE_FAILED;
     }
-
-    entry = &lang->entries[lang->count++];
-    ci18n_copy(entry->key, CI18N_MAX_KEY_LENGTH, key);
-    ci18n_copy(entry->value, CI18N_MAX_VALUE_LENGTH, value);
 
     return CI18N_LINE_LOADED;
 }
@@ -830,11 +1095,7 @@ CI18N_DEF void ci18n_free(void)
 
     for (i = 0; i < ci18n_ctx.language_count; i++)
     {
-        if (ci18n_ctx.languages[i].entries)
-        {
-            free(ci18n_ctx.languages[i].entries);
-            ci18n_ctx.languages[i].entries = NULL;
-        }
+        ci18n_lang_release(&ci18n_ctx.languages[i]);
     }
 
     memset(&ci18n_ctx, 0, sizeof(ci18n_context_t));
@@ -1065,7 +1326,7 @@ CI18N_DEF const char *ci18n_get(const char *key)
             if (entry_idx >= 0)
             {
                 ci18n_succeed();
-                return lang->entries[entry_idx].value;
+                return ci18n_arena_at(&lang->strings, lang->entries[entry_idx].value);
             }
         }
     }
@@ -1081,7 +1342,7 @@ CI18N_DEF const char *ci18n_get(const char *key)
             if (entry_idx >= 0)
             {
                 ci18n_succeed();
-                return lang->entries[entry_idx].value;
+                return ci18n_arena_at(&lang->strings, lang->entries[entry_idx].value);
             }
         }
     }
@@ -1147,8 +1408,8 @@ CI18N_DEF size_t ci18n_get_languages(const char **out, size_t capacity)
 CI18N_DEF bool ci18n_set(const char *language_code, const char *key, const char *value)
 {
     ci18n_language_t *lang;
-    ci18n_entry_t *entry;
-    int existing;
+    size_t key_len;
+    size_t value_len;
 
     if (!ci18n_ctx.initialized)
     {
@@ -1171,24 +1432,23 @@ CI18N_DEF bool ci18n_set(const char *language_code, const char *key, const char 
         return false; /* get_or_create already recorded why */
     }
 
-    /* Check if key already exists */
-    existing = ci18n_find_entry(lang, key);
-    if (existing >= 0)
+    /* Same clamping the parser applies, so both routes store the same thing. */
+    key_len = strlen(key);
+    if (key_len > CI18N_MAX_KEY_LENGTH - 1)
     {
-        ci18n_copy(lang->entries[existing].value, CI18N_MAX_VALUE_LENGTH, value);
-        ci18n_succeed();
-        return true;
+        key_len = CI18N_MAX_KEY_LENGTH - 1;
     }
 
-    /* Add new entry */
-    if (!ci18n_ensure_capacity(lang))
+    value_len = strlen(value);
+    if (value_len > CI18N_MAX_VALUE_LENGTH - 1)
     {
-        return false; /* ensure_capacity already recorded why */
+        value_len = CI18N_MAX_VALUE_LENGTH - 1;
     }
 
-    entry = &lang->entries[lang->count++];
-    ci18n_copy(entry->key, CI18N_MAX_KEY_LENGTH, key);
-    ci18n_copy(entry->value, CI18N_MAX_VALUE_LENGTH, value);
+    if (!ci18n_lang_set(lang, key, key_len, value, value_len))
+    {
+        return false; /* the storage layer already recorded why */
+    }
 
     ci18n_succeed();
     return true;
@@ -1224,15 +1484,21 @@ CI18N_DEF bool ci18n_remove(const char *language_code, const char *key)
         return ci18n_fail(CI18N_ERR_KEY_NOT_FOUND);
     }
 
-    /* Shift remaining entries */
-    if (entry_idx < (int)(lang->count - 1))
+    /* Move the last entry into the hole rather than shifting everything down.
+     * Buckets hold indices, so a shift would invalidate every index above the
+     * hole; this only disturbs one. Insertion order is not preserved, and
+     * nothing observable depends on it.
+     *
+     * The strings stay in the arena as dead weight until ci18n_clear() or
+     * ci18n_free(), which is the price of packing them contiguously. */
+    lang->count--;
+    if ((size_t)entry_idx != lang->count)
     {
-        memmove(&lang->entries[entry_idx],
-                &lang->entries[entry_idx + 1],
-                sizeof(ci18n_entry_t) * (lang->count - 1 - entry_idx));
+        lang->entries[entry_idx] = lang->entries[lang->count];
     }
 
-    lang->count--;
+    ci18n_rebuild_buckets(lang);
+
     ci18n_succeed();
     return true;
 }
@@ -1270,7 +1536,22 @@ CI18N_DEF bool ci18n_clear(const char *language_code)
         ci18n_ctx.fallback_language[0] = '\0';
     }
 
+    /* Unlike removing entries one at a time, clearing reclaims the strings:
+     * the arena is rewound rather than freed, so the next load reuses the
+     * memory instead of asking for it again. */
     lang->count = 0;
+    lang->strings.used = 0;
+
+    if (lang->bucket_count > 0)
+    {
+        size_t i;
+
+        for (i = 0; i < lang->bucket_count; i++)
+        {
+            lang->buckets[i] = CI18N_NO_INDEX;
+        }
+    }
+
     ci18n_succeed();
     return true;
 }
