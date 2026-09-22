@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.2.0
+ * ci18n.h - v2.3.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -33,6 +33,8 @@
  *   key=value
  *   # This is a comment
  *   welcome_message=Welcome to our application!
+ *   multiline=First line.
+Second line.
  *
  * Copyright (c) 2026 Ilya Brin
  *
@@ -51,9 +53,9 @@
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 2
+#define CI18N_VERSION_MINOR 3
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.2.0"
+#define CI18N_VERSION_STRING "2.3.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -848,6 +850,119 @@ static const char *ci18n_arena_at(const ci18n_arena_t *arena, uint32_t offset)
     return arena->data + offset;
 }
 
+/*
+ * Decode one escape sequence.
+ *
+ * `text` points at the character after the backslash. Returns the byte to
+ * emit and sets *consumed to how much of the input it used. An unknown
+ * sequence keeps both characters, so a stray backslash in a translation stays
+ * visible instead of quietly deleting the letter after it.
+ */
+static char ci18n_unescape_one(const char *text, size_t remaining, size_t *consumed)
+{
+    if (remaining == 0)
+    {
+        *consumed = 0;
+        return '\\';
+    }
+
+    *consumed = 1;
+
+    switch (text[0])
+    {
+    case 'n':
+        return '\n';
+    case 't':
+        return '\t';
+    case 'r':
+        return '\r';
+    case '\\':
+        return '\\';
+    case '=':
+        return '=';
+    case '#':
+        return '#';
+    case ';':
+        return ';';
+    case ' ':
+        return ' ';
+    default:
+        break;
+    }
+
+    /* Not an escape we know: emit the backslash and leave the rest alone. */
+    *consumed = 0;
+    return '\\';
+}
+
+/* Length the text will have once its escapes are decoded. */
+static size_t ci18n_unescaped_length(const char *text, size_t len)
+{
+    size_t out = 0;
+    size_t i = 0;
+
+    while (i < len)
+    {
+        if (text[i] == '\\')
+        {
+            size_t consumed;
+
+            ci18n_unescape_one(text + i + 1, len - i - 1, &consumed);
+            i += 1 + consumed;
+        }
+        else
+        {
+            i++;
+        }
+
+        out++;
+    }
+
+    return out;
+}
+
+/*
+ * Copy into the arena, decoding escapes as it goes.
+ *
+ * Decoding happens here rather than in a scratch buffer because the arena is
+ * where the bytes are going anyway, and a translation line has no business
+ * needing a second copy of itself.
+ */
+static bool ci18n_arena_add_unescaped(ci18n_arena_t *arena, const char *text, size_t len,
+                                      uint32_t *out_offset)
+{
+    size_t decoded_len = ci18n_unescaped_length(text, len);
+    size_t i = 0;
+    size_t out;
+
+    if (!ci18n_arena_reserve(arena, decoded_len + 1))
+    {
+        return false;
+    }
+
+    *out_offset = (uint32_t)arena->used;
+    out = arena->used;
+
+    while (i < len)
+    {
+        if (text[i] == '\\')
+        {
+            size_t consumed;
+
+            arena->data[out++] = ci18n_unescape_one(text + i + 1, len - i - 1, &consumed);
+            i += 1 + consumed;
+        }
+        else
+        {
+            arena->data[out++] = text[i++];
+        }
+    }
+
+    arena->data[out] = '\0';
+    arena->used = out + 1;
+    return true;
+}
+
 /* Link every entry into its bucket from scratch, after the table resized. */
 static void ci18n_rebuild_buckets(ci18n_language_t *lang)
 {
@@ -993,31 +1108,92 @@ static int ci18n_find_entry(ci18n_language_t *lang, const char *key)
  * value is appended and the old bytes stay in the arena as dead weight until
  * the language is cleared.
  */
-static bool ci18n_lang_set(ci18n_language_t *lang,
-                           const char *key, size_t key_len,
-                           const char *value, size_t value_len)
+static bool ci18n_lang_set_ex(ci18n_language_t *lang,
+                              const char *key, size_t key_len,
+                              const char *value, size_t value_len,
+                              bool unescape)
 {
-    uint32_t hash = ci18n_hash(key, key_len);
+    uint32_t hash;
     uint32_t key_offset;
     uint32_t value_offset;
     ci18n_entry_t *entry;
     size_t bucket;
-    int existing = ci18n_find_entry_n(lang, key, key_len, hash);
+    int existing;
+    char decoded_key[CI18N_MAX_KEY_LENGTH];
+
+    /* Lookups compare decoded keys, so a key written with escapes has to be
+     * decoded before it is hashed. This is the one place a scratch buffer
+     * earns its keep, and only when the key actually contains a backslash. */
+    if (unescape && memchr(key, '\\', key_len) != NULL)
+    {
+        size_t decoded_len = ci18n_unescaped_length(key, key_len);
+        uint32_t offset;
+
+        if (decoded_len > sizeof(decoded_key) - 1)
+        {
+            decoded_len = sizeof(decoded_key) - 1;
+        }
+
+        if (!ci18n_arena_add_unescaped(&lang->strings, key, key_len, &offset))
+        {
+            return false;
+        }
+
+        memcpy(decoded_key, lang->strings.data + offset, decoded_len);
+        decoded_key[decoded_len] = '\0';
+        lang->strings.used = offset;
+
+        key = decoded_key;
+        key_len = decoded_len;
+        unescape = false; /* already decoded */
+    }
+
+    hash = ci18n_hash(key, key_len);
+    existing = ci18n_find_entry_n(lang, key, key_len, hash);
 
     if (existing >= 0)
     {
+        size_t stored_len = unescape ? ci18n_unescaped_length(value, value_len) : value_len;
+
         entry = &lang->entries[existing];
 
-        if (strlen(ci18n_arena_at(&lang->strings, entry->value)) >= value_len)
+        if (strlen(ci18n_arena_at(&lang->strings, entry->value)) >= stored_len)
         {
             char *slot = lang->strings.data + entry->value;
 
-            memcpy(slot, value, value_len);
-            slot[value_len] = '\0';
+            if (unescape)
+            {
+                uint32_t offset;
+
+                /* Decode into the existing slot by decoding to the arena tail
+                 * and moving it back, which keeps one implementation of the
+                 * escape rules rather than two. */
+                if (!ci18n_arena_add_unescaped(&lang->strings, value, value_len, &offset))
+                {
+                    return false;
+                }
+
+                slot = lang->strings.data + entry->value;
+                memcpy(slot, lang->strings.data + offset, stored_len + 1);
+                lang->strings.used = offset;
+            }
+            else
+            {
+                memcpy(slot, value, value_len);
+                slot[value_len] = '\0';
+            }
+
             return true;
         }
 
-        if (!ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
+        if (unescape)
+        {
+            if (!ci18n_arena_add_unescaped(&lang->strings, value, value_len, &value_offset))
+            {
+                return false;
+            }
+        }
+        else if (!ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
         {
             return false;
         }
@@ -1038,12 +1214,16 @@ static bool ci18n_lang_set(ci18n_language_t *lang,
         return false;
     }
 
-    if (!ci18n_arena_add(&lang->strings, key, key_len, &key_offset))
+    if (unescape)
     {
-        return false;
+        if (!ci18n_arena_add_unescaped(&lang->strings, key, key_len, &key_offset) ||
+            !ci18n_arena_add_unescaped(&lang->strings, value, value_len, &value_offset))
+        {
+            return false;
+        }
     }
-
-    if (!ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
+    else if (!ci18n_arena_add(&lang->strings, key, key_len, &key_offset) ||
+             !ci18n_arena_add(&lang->strings, value, value_len, &value_offset))
     {
         return false;
     }
@@ -1058,6 +1238,15 @@ static bool ci18n_lang_set(ci18n_language_t *lang,
     lang->count++;
 
     return true;
+}
+
+/* Programmatic values arrive already unescaped by the C compiler, so this
+ * path stores them verbatim. Only the file and buffer parsers decode. */
+static bool ci18n_lang_set(ci18n_language_t *lang,
+                           const char *key, size_t key_len,
+                           const char *value, size_t value_len)
+{
+    return ci18n_lang_set_ex(lang, key, key_len, value, value_len, false);
 }
 
 /* Release everything one language holds. */
@@ -1138,6 +1327,13 @@ static void ci18n_trim_slice(const char **text, size_t *len)
 
     while (n > 0 && ci18n_is_space(start[n - 1]))
     {
+        /* An escaped space is content, not padding, which is the only way to
+         * keep a trailing space that trimming would otherwise eat. */
+        if (n >= 2 && start[n - 2] == '\\')
+        {
+            break;
+        }
+
         n--;
     }
 
@@ -1171,7 +1367,8 @@ static ci18n_line_result_t ci18n_parse_line(ci18n_language_t *lang, const char *
         line += 3;
     }
 
-    /* Skip empty lines and comments */
+    /* Skip empty lines and comments. A key that genuinely starts with # or ;
+     * is written \# or \; and reaches the parser below. */
     while (*line && ci18n_is_space(*line))
         line++;
     if (*line == '\0' || *line == '#' || *line == ';')
@@ -1179,8 +1376,30 @@ static ci18n_line_result_t ci18n_parse_line(ci18n_language_t *lang, const char *
         return CI18N_LINE_SKIPPED;
     }
 
-    /* Find equals sign */
-    eq = strchr(line, '=');
+    /* Find the separator, skipping any that is escaped, so a key may contain
+     * an equals sign by writing \=. */
+    eq = NULL;
+    {
+        size_t scan = 0;
+
+        while (line[scan] != '\0')
+        {
+            if (line[scan] == '\\' && line[scan + 1] != '\0')
+            {
+                scan += 2;
+                continue;
+            }
+
+            if (line[scan] == '=')
+            {
+                eq = line + scan;
+                break;
+            }
+
+            scan++;
+        }
+    }
+
     if (!eq)
     {
         return CI18N_LINE_MALFORMED;
@@ -1213,7 +1432,7 @@ static ci18n_line_result_t ci18n_parse_line(ci18n_language_t *lang, const char *
         ci18n_ctx.load_stats.values_truncated++;
     }
 
-    if (!ci18n_lang_set(lang, key, key_len, value, value_len))
+    if (!ci18n_lang_set_ex(lang, key, key_len, value, value_len, true))
     {
         return CI18N_LINE_FAILED;
     }

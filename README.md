@@ -105,6 +105,35 @@ farewell=Goodbye!
 error=An error occurred
 ```
 
+## Escape sequences
+
+A value is otherwise taken literally, so these are the way to put a line break
+or an equals sign into a translation:
+
+| Written | Becomes |
+| --- | --- |
+| `\n` | line feed |
+| `\t` | tab |
+| `\r` | carriage return |
+| `\\` | backslash |
+| `\=` | an equals sign, so a key can contain one |
+| `\#` and `\;` | a key may start with a comment marker |
+| `\ ` | a space that trimming will not eat |
+
+```ini
+multiline=First line.\nSecond line.
+we\=ird=a key with an equals sign in it
+padded=keeps one trailing space\
+```
+
+Only the file and buffer parsers decode these. `ci18n_set()` takes strings the
+C compiler has already unescaped, so `ci18n_set("en", "path", "C:\\new")`
+stores a Windows path, not a line break.
+
+An unrecognised sequence keeps both characters, so `\q` stays `\q`. A
+mistake in a translation should be visible, not silently eat the character
+after it.
+
 ## Configuration
 
 Define macros before including the header to configure:
@@ -328,8 +357,8 @@ it if you need to hold on to it.
 ### Version check
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 2, 0)
-#error "ci18n 2.2.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 3, 0)
+#error "ci18n 2.3.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -383,7 +412,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.2.0)
+  GIT_TAG v2.3.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

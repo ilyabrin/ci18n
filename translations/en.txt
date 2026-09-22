@@ -14,3 +14,7 @@ menu_help=Help
 # English needs two of them.
 files[one]=%d file
 files[other]=%d files
+
+# Escapes: only the parser decodes these.
+multiline=First line.
+Second line.

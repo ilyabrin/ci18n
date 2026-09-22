@@ -8,10 +8,46 @@ Because this is a single-header library, upgrading means replacing one file.
 Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 2, 0)
-#error "ci18n 2.2.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 3, 0)
+#error "ci18n 2.3.0 or newer is required"
 #endif
 ```
+
+## 2.3.0 - 2026-09-22
+
+Escape sequences in translation files. Additive.
+
+### Added
+
+Seven escapes, decoded by the file and buffer parsers:
+
+| Written | Becomes |
+| --- | --- |
+| `\\n` | line feed |
+| `\\t` | tab |
+| `\\r` | carriage return |
+| `\\\\` | backslash |
+| `\\=` | an equals sign, so a key can contain one |
+| `\\#` and `\\;` | a key may start with a comment marker |
+| `\\ ` | a space that trimming will not eat |
+
+Before this, a value was taken literally, so a translation could not contain a
+line break at all.
+
+### Notes
+
+- **Only the parsers decode.** `ci18n_set()` receives strings the C compiler
+  has already unescaped, so decoding there would turn `"C:\\new"` into a path
+  with a line break in it.
+- The separator is the first *unescaped* equals sign, so `we\\=ird=value`
+  stores the key `we=ird`.
+- An unrecognised sequence keeps both characters: `\\q` stays `\\q`, and a
+  trailing backslash stays a backslash. Same reasoning as an unmatched
+  placeholder: a mistake in a translation should be visible rather than
+  silently eat the character after it.
+- Two escape-heavy seeds were added to the fuzz corpus, which is now 20 files,
+  and the random stress inputs now include backslashes and braces rather than
+  reaching them only by chance.
 
 ## 2.2.0 - 2026-09-22
 

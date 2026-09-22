@@ -1287,6 +1287,149 @@ TEST(test_plural_guards)
 }
 
 /* ============================================================================
+ * Escape sequences
+ *
+ * Decoded by the parser only. ci18n_set() takes strings the C compiler has
+ * already unescaped, so decoding there would corrupt a value that genuinely
+ * contains a backslash.
+ * ============================================================================ */
+
+TEST(test_escapes_in_values)
+{
+    ci18n_init();
+
+    ASSERT(ci18n_load_from_buffer("en",
+                                  "newline=a\\nb\n"
+                                  "tab=a\\tb\n"
+                                  "carriage=a\\rb\n"
+                                  "backslash=a\\\\b\n"
+                                  "equals=a\\=b\n",
+                                  strlen("newline=a\\nb\n"
+                                         "tab=a\\tb\n"
+                                         "carriage=a\\rb\n"
+                                         "backslash=a\\\\b\n"
+                                         "equals=a\\=b\n")) == true);
+
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("newline"), "a\nb");
+    ASSERT_STR_EQ(ci18n_get("tab"), "a\tb");
+    ASSERT_STR_EQ(ci18n_get("carriage"), "a\rb");
+    ASSERT_STR_EQ(ci18n_get("backslash"), "a\\b");
+    ASSERT_STR_EQ(ci18n_get("equals"), "a=b");
+
+    ci18n_free();
+}
+
+TEST(test_escaped_separator_in_key)
+{
+    const char *buffer = "we\\=ird=value\nplain=other\n";
+
+    ci18n_init();
+    ASSERT(ci18n_load_from_buffer("en", buffer, strlen(buffer)) == true);
+    ASSERT(ci18n_count("en") == 2);
+
+    ci18n_set_current("en");
+
+    /* The key holds a real equals sign, and the split happened at the first
+     * unescaped one. */
+    ASSERT_STR_EQ(ci18n_get("we=ird"), "value");
+    ASSERT(ci18n_get("we\\=ird") == NULL);
+    ASSERT_STR_EQ(ci18n_get("plain"), "other");
+
+    ci18n_free();
+}
+
+TEST(test_escaped_comment_markers)
+{
+    const char *buffer = "\\#hash=value one\n\\;semi=value two\n# real comment\n";
+
+    ci18n_init();
+    ASSERT(ci18n_load_from_buffer("en", buffer, strlen(buffer)) == true);
+    ASSERT(ci18n_count("en") == 2);
+
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("#hash"), "value one");
+    ASSERT_STR_EQ(ci18n_get(";semi"), "value two");
+
+    ci18n_free();
+}
+
+TEST(test_escaped_space_survives_trimming)
+{
+    const char *buffer = "padded=value\\ \ntrimmed=value   \n";
+
+    ci18n_init();
+    ASSERT(ci18n_load_from_buffer("en", buffer, strlen(buffer)) == true);
+
+    ci18n_set_current("en");
+
+    /* An escaped trailing space is content; an unescaped one is padding. This
+     * is the only way to keep whitespace the trimmer would otherwise eat. */
+    ASSERT_STR_EQ(ci18n_get("padded"), "value ");
+    ASSERT_STR_EQ(ci18n_get("trimmed"), "value");
+
+    ci18n_free();
+}
+
+TEST(test_unknown_escape_is_left_alone)
+{
+    const char *buffer = "weird=a\\qb\ntrailing=ends with\\\n";
+
+    ci18n_init();
+    ASSERT(ci18n_load_from_buffer("en", buffer, strlen(buffer)) == true);
+
+    ci18n_set_current("en");
+
+    /* An unrecognised sequence keeps both characters, so a stray backslash
+     * stays visible rather than deleting the letter after it. */
+    ASSERT_STR_EQ(ci18n_get("weird"), "a\\qb");
+
+    /* A backslash at the very end is just a backslash. */
+    ASSERT_STR_EQ(ci18n_get("trailing"), "ends with\\");
+
+    ci18n_free();
+}
+
+TEST(test_set_does_not_decode_escapes)
+{
+    ci18n_init();
+
+    /* The C compiler already turned this source text into a backslash and an
+     * n. Decoding again would turn a Windows path into a line break. */
+    ci18n_set("en", "path", "C:\\new\\table");
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("path"), "C:\\new\\table");
+
+    /* And a key with a backslash is stored as written. */
+    ci18n_set("en", "a\\b", "v");
+    ASSERT_STR_EQ(ci18n_get("a\\b"), "v");
+
+    ci18n_free();
+}
+
+TEST(test_escapes_survive_update_paths)
+{
+    ci18n_init();
+    ci18n_set_current("en");
+
+    /* Shorter replacement, written into the existing slot. */
+    ASSERT(ci18n_load_from_buffer("en", "k=aaaa\\nbbbb\n", 13) == true);
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_get("k"), "aaaa\nbbbb");
+
+    ASSERT(ci18n_load_from_buffer("en", "k=x\\ny\n", 7) == true);
+    ASSERT_STR_EQ(ci18n_get("k"), "x\ny");
+
+    /* Longer replacement, appended to the arena. */
+    ASSERT(ci18n_load_from_buffer("en", "k=much\\tlonger\\tvalue\\there\n", 27) == true);
+    ASSERT_STR_EQ(ci18n_get("k"), "much\tlonger\tvalue\there");
+
+    ASSERT(ci18n_count("en") == 1);
+
+    ci18n_free();
+}
+
+/* ============================================================================
  * Interpolation
  * ============================================================================ */
 
@@ -1970,6 +2113,14 @@ int main(void)
     RUN_TEST(test_plural_lookup_russian);
     RUN_TEST(test_plural_falls_back_through_other_then_plain);
     RUN_TEST(test_plural_guards);
+
+    RUN_TEST(test_escapes_in_values);
+    RUN_TEST(test_escaped_separator_in_key);
+    RUN_TEST(test_escaped_comment_markers);
+    RUN_TEST(test_escaped_space_survives_trimming);
+    RUN_TEST(test_unknown_escape_is_left_alone);
+    RUN_TEST(test_set_does_not_decode_escapes);
+    RUN_TEST(test_escapes_survive_update_paths);
 
     RUN_TEST(test_format_substitutes_by_name);
     RUN_TEST(test_format_order_is_the_translations_business);

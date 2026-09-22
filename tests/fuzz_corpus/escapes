@@ -1,0 +1,8 @@
+nl=a
+b
+tab=a	b
+bs=a\b
+eq=we\=ird
+sp=pad\ 
+bad=a\qb
+end=trail\n
