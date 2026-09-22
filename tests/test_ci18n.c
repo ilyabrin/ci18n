@@ -1075,6 +1075,293 @@ TEST(test_reload_same_file_twice)
 }
 
 /* ============================================================================
+ * Plurals
+ *
+ * The category tables below are the point of the feature, so they are checked
+ * against counts where the families actually disagree, not just against 1 and
+ * 2. Russian is the motivating case: 1, 2 and 5 take three different forms,
+ * and 11 and 21 are where a naive rule gets it wrong.
+ * ============================================================================ */
+
+TEST(test_plural_category_english)
+{
+    ASSERT(ci18n_plural_category("en", 0) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("en", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("en", 2) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("en", 21) == CI18N_PLURAL_OTHER);
+
+    /* An unknown language is treated as English-like. */
+    ASSERT(ci18n_plural_category("xx", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("xx", 5) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category(NULL, 1) == CI18N_PLURAL_ONE);
+}
+
+TEST(test_plural_category_russian)
+{
+    /* one: 1, 21, 31 but not 11 */
+    ASSERT(ci18n_plural_category("ru", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("ru", 21) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("ru", 101) == CI18N_PLURAL_ONE);
+
+    /* few: 2 to 4, 22 to 24, but not 12 to 14 */
+    ASSERT(ci18n_plural_category("ru", 2) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("ru", 4) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("ru", 23) == CI18N_PLURAL_FEW);
+
+    /* many: 0, 5 to 20, and the teens that the other rules excluded */
+    ASSERT(ci18n_plural_category("ru", 0) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("ru", 5) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("ru", 11) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("ru", 12) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("ru", 14) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("ru", 100) == CI18N_PLURAL_MANY);
+
+    /* A region subtag must not change the rule. */
+    ASSERT(ci18n_plural_category("ru-RU", 2) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("ru_RU.UTF-8", 2) == CI18N_PLURAL_FEW);
+
+    /* Ukrainian and Belarusian share the family. */
+    ASSERT(ci18n_plural_category("uk", 11) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("be", 3) == CI18N_PLURAL_FEW);
+}
+
+TEST(test_plural_category_other_families)
+{
+    /* No plural distinction at all. */
+    ASSERT(ci18n_plural_category("ja", 1) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("zh", 5) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("ko", 0) == CI18N_PLURAL_OTHER);
+
+    /* French counts zero as one. */
+    ASSERT(ci18n_plural_category("fr", 0) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("fr", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("fr", 2) == CI18N_PLURAL_OTHER);
+
+    /* Polish: 1 alone is one, and unlike Russian 0 is many. */
+    ASSERT(ci18n_plural_category("pl", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("pl", 2) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("pl", 5) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("pl", 22) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("pl", 12) == CI18N_PLURAL_MANY);
+
+    /* Czech has no many for integers. */
+    ASSERT(ci18n_plural_category("cs", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("cs", 3) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("cs", 5) == CI18N_PLURAL_OTHER);
+
+    /* Croatian looks like Russian but tops out at other. */
+    ASSERT(ci18n_plural_category("hr", 21) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("hr", 22) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("hr", 5) == CI18N_PLURAL_OTHER);
+
+    /* Arabic is the one that uses all six. */
+    ASSERT(ci18n_plural_category("ar", 0) == CI18N_PLURAL_ZERO);
+    ASSERT(ci18n_plural_category("ar", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("ar", 2) == CI18N_PLURAL_TWO);
+    ASSERT(ci18n_plural_category("ar", 3) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("ar", 11) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("ar", 100) == CI18N_PLURAL_OTHER);
+
+    /* Lithuanian excludes the whole teens range. */
+    ASSERT(ci18n_plural_category("lt", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("lt", 11) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("lt", 2) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("lt", 19) == CI18N_PLURAL_OTHER);
+
+    /* Latvian has a zero category that 0 is not the only member of. */
+    ASSERT(ci18n_plural_category("lv", 0) == CI18N_PLURAL_ZERO);
+    ASSERT(ci18n_plural_category("lv", 11) == CI18N_PLURAL_ZERO);
+    ASSERT(ci18n_plural_category("lv", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("lv", 21) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("lv", 2) == CI18N_PLURAL_OTHER);
+
+    /* Slovenian has a dual. */
+    ASSERT(ci18n_plural_category("sl", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("sl", 2) == CI18N_PLURAL_TWO);
+    ASSERT(ci18n_plural_category("sl", 3) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("sl", 5) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("sl", 101) == CI18N_PLURAL_ONE);
+
+    /* Irish uses four of them. */
+    ASSERT(ci18n_plural_category("ga", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("ga", 2) == CI18N_PLURAL_TWO);
+    ASSERT(ci18n_plural_category("ga", 5) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("ga", 8) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("ga", 11) == CI18N_PLURAL_OTHER);
+
+    /* Romanian puts 0 and the teens together. */
+    ASSERT(ci18n_plural_category("ro", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("ro", 0) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("ro", 19) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("ro", 20) == CI18N_PLURAL_OTHER);
+}
+
+TEST(test_plural_negative_counts)
+{
+    /* Minus three things is still three things. */
+    ASSERT(ci18n_plural_category("ru", -1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("ru", -2) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("ru", -5) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("en", -1) == CI18N_PLURAL_ONE);
+}
+
+TEST(test_plural_category_names)
+{
+    ASSERT_STR_EQ(ci18n_plural_category_name(CI18N_PLURAL_ZERO), "zero");
+    ASSERT_STR_EQ(ci18n_plural_category_name(CI18N_PLURAL_ONE), "one");
+    ASSERT_STR_EQ(ci18n_plural_category_name(CI18N_PLURAL_TWO), "two");
+    ASSERT_STR_EQ(ci18n_plural_category_name(CI18N_PLURAL_FEW), "few");
+    ASSERT_STR_EQ(ci18n_plural_category_name(CI18N_PLURAL_MANY), "many");
+    ASSERT_STR_EQ(ci18n_plural_category_name(CI18N_PLURAL_OTHER), "other");
+    ASSERT_STR_EQ(ci18n_plural_category_name((ci18n_plural_category_t)999), "other");
+}
+
+TEST(test_plural_lookup_russian)
+{
+    ci18n_init();
+
+    ci18n_set("ru", "files[one]", "%d файл");
+    ci18n_set("ru", "files[few]", "%d файла");
+    ci18n_set("ru", "files[many]", "%d файлов");
+    ci18n_set_current("ru");
+
+    ASSERT_STR_EQ(ci18n_plural("files", 1), "%d файл");
+    ASSERT_STR_EQ(ci18n_plural("files", 2), "%d файла");
+    ASSERT_STR_EQ(ci18n_plural("files", 5), "%d файлов");
+    ASSERT_STR_EQ(ci18n_plural("files", 11), "%d файлов");
+    ASSERT_STR_EQ(ci18n_plural("files", 21), "%d файл");
+
+    ci18n_free();
+}
+
+TEST(test_plural_falls_back_through_other_then_plain)
+{
+    ci18n_init();
+
+    /* Only the catch-all form exists, so every count lands on it. */
+    ci18n_set("ru", "items[other]", "items catch-all");
+    ci18n_set_current("ru");
+    ASSERT_STR_EQ(ci18n_plural("items", 1), "items catch-all");
+    ASSERT_STR_EQ(ci18n_plural("items", 5), "items catch-all");
+
+    /* The exact form wins once it is there. */
+    ci18n_set("ru", "items[one]", "items one");
+    ASSERT_STR_EQ(ci18n_plural("items", 1), "items one");
+    ASSERT_STR_EQ(ci18n_plural("items", 5), "items catch-all");
+
+    /* A key with no plural forms at all still answers. */
+    ci18n_set("ru", "plain", "no forms here");
+    ASSERT_STR_EQ(ci18n_plural("plain", 3), "no forms here");
+
+    /* And a key that does not exist reports as much. */
+    ASSERT(ci18n_plural("absent", 1) == NULL);
+    ASSERT(ci18n_last_error() == CI18N_ERR_KEY_NOT_FOUND);
+    ASSERT_STR_EQ(ci18n_plural_or_key("absent", 1), "absent");
+
+    ci18n_free();
+}
+
+TEST(test_plural_guards)
+{
+    ASSERT(ci18n_plural("k", 1) == NULL);
+    ASSERT(ci18n_last_error() == CI18N_ERR_NOT_INITIALIZED);
+
+    ci18n_init();
+    ASSERT(ci18n_plural(NULL, 1) == NULL);
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
+
+    /* A key too long to hold a bracket suffix must not overflow the buffer;
+     * it simply cannot match a plural form. */
+    {
+        char long_key[CI18N_MAX_KEY_LENGTH];
+
+        memset(long_key, 'k', sizeof(long_key) - 1);
+        long_key[sizeof(long_key) - 1] = '\0';
+
+        ci18n_set("en", long_key, "plain value");
+        ci18n_set_current("en");
+        ASSERT_STR_EQ(ci18n_plural(long_key, 2), "plain value");
+    }
+
+    ci18n_free();
+}
+
+/* ============================================================================
+ * Locale detection
+ * ============================================================================ */
+
+TEST(test_set_current_best_walks_the_chain)
+{
+    ci18n_init();
+
+    ci18n_set("ru", "k", "russian");
+    ci18n_set("en", "k", "english");
+
+    /* Exact match. */
+    ASSERT(ci18n_set_current_best("ru") == true);
+    ASSERT_STR_EQ(ci18n_get("k"), "russian");
+
+    /* A region subtag nobody loaded falls back to the bare language, which is
+     * the whole point: load "ru", honour a user asking for "ru-RU". */
+    ASSERT(ci18n_set_current_best("ru-RU") == true);
+    ASSERT_STR_EQ(ci18n_get_current(), "ru");
+
+    /* Underscores are accepted as well as hyphens. */
+    ASSERT(ci18n_set_current_best("en_GB") == true);
+    ASSERT_STR_EQ(ci18n_get_current(), "en");
+
+    /* Three subtags deep. */
+    ASSERT(ci18n_set_current_best("ru-Cyrl-RU") == true);
+    ASSERT_STR_EQ(ci18n_get_current(), "ru");
+
+    ci18n_free();
+}
+
+TEST(test_set_current_best_leaves_current_alone_on_failure)
+{
+    ci18n_init();
+
+    ci18n_set("en", "k", "english");
+    ci18n_set_current("en");
+
+    ASSERT(ci18n_set_current_best("de-DE") == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_LANGUAGE_NOT_FOUND);
+
+    /* A failed selection must not leave the program with no language. */
+    ASSERT_STR_EQ(ci18n_get_current(), "en");
+    ASSERT_STR_EQ(ci18n_get("k"), "english");
+
+    ci18n_free();
+}
+
+TEST(test_detect_locale)
+{
+    char buffer[CI18N_MAX_CODE_LENGTH];
+    size_t len;
+
+    ci18n_init();
+
+    /* Whatever this machine reports, the result has to be a usable tag or an
+     * honest nothing, never junk. */
+    len = ci18n_detect_locale(buffer, sizeof(buffer));
+    ASSERT(len == strlen(buffer));
+
+    if (len > 0)
+    {
+        ASSERT(strchr(buffer, '.') == NULL);
+        ASSERT(strchr(buffer, '@') == NULL);
+        ASSERT(strchr(buffer, '_') == NULL);
+        ASSERT(strcmp(buffer, "C") != 0);
+        ASSERT(strcmp(buffer, "POSIX") != 0);
+    }
+
+    ASSERT(ci18n_detect_locale(NULL, 10) == 0);
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
+
+    ci18n_free();
+}
+
+/* ============================================================================
  * Diagnostics
  * ============================================================================ */
 
@@ -1472,6 +1759,19 @@ int main(void)
     RUN_TEST(test_value_update_shorter_and_longer);
     RUN_TEST(test_clear_then_reuse);
     RUN_TEST(test_reload_same_file_twice);
+
+    RUN_TEST(test_plural_category_english);
+    RUN_TEST(test_plural_category_russian);
+    RUN_TEST(test_plural_category_other_families);
+    RUN_TEST(test_plural_negative_counts);
+    RUN_TEST(test_plural_category_names);
+    RUN_TEST(test_plural_lookup_russian);
+    RUN_TEST(test_plural_falls_back_through_other_then_plain);
+    RUN_TEST(test_plural_guards);
+
+    RUN_TEST(test_set_current_best_walks_the_chain);
+    RUN_TEST(test_set_current_best_leaves_current_alone_on_failure);
+    RUN_TEST(test_detect_locale);
 
     RUN_TEST(test_error_string_covers_every_code);
     RUN_TEST(test_last_error_before_init);

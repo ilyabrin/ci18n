@@ -9,3 +9,7 @@ success=Operación completada con éxito
 menu_file=Archivo
 menu_edit=Editar
 menu_help=Ayuda
+
+# Formas plurales: el sufijo entre corchetes es la categoria CLDR.
+files[one]=%d archivo
+files[other]=%d archivos

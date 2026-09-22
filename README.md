@@ -175,6 +175,68 @@ default. A longer code is rejected with `CI18N_ERR_CODE_TOO_LONG` rather than
 truncated, because truncating used to mean the value could be written and
 never read back.
 
+### Plurals
+
+A key-value table cannot translate Russian, which needs three forms where
+English needs two. Plural forms are ordinary keys with the CLDR category in
+brackets:
+
+```ini
+# en
+files[one]=%d file
+files[other]=%d files
+
+# ru
+files[one]=%d файл
+files[few]=%d файла
+files[many]=%d файлов
+```
+
+Then ask by count:
+
+```c
+printf(ci18n_plural_or_key("files", n), n);
+```
+
+```
+en:   1 file    2 files    5 files    11 files    21 files
+ru:   1 файл    2 файла    5 файлов   11 файлов   21 файл
+```
+
+Note 11 and 21: a rule that just checks for 1 gets Russian wrong, which is
+why the category comes from CLDR rather than from the caller. Lookup tries
+`key[category]`, then `key[other]`, then plain `key`, so a translation only
+has to be as detailed as it needs to be.
+
+Rules are known for English-like languages, French and Portuguese, Russian,
+Ukrainian and Belarusian, Polish, Czech and Slovak, Croatian and Serbian,
+Arabic, Lithuanian, Latvian, Slovenian, Irish, Romanian, and languages with
+no plural distinction such as Japanese, Chinese and Korean. An unknown
+language is treated as English-like. Only integer counts are considered.
+
+### Locale detection
+
+```c
+char locale[CI18N_MAX_CODE_LENGTH];
+ci18n_detect_locale(locale, sizeof(locale));   /* "ru-RU" */
+
+ci18n_set_current_best(NULL);                  /* use what the system says */
+ci18n_set_current_best("ru-RU");               /* or a locale you choose */
+```
+
+`ci18n_detect_locale()` reads `LC_ALL`, `LC_MESSAGES` and `LANG`, and on
+Windows asks the system for the user's default locale. It normalises the
+result, so `ru_RU.UTF-8` comes back as `ru-RU`, and `C` or `POSIX` report
+nothing because they name no language.
+
+`ci18n_set_current_best()` drops subtags until something matches: `ru-RU`,
+then `ru`. That means you can ship one plain `ru` file and still honour a
+user asking for Russian as spoken in Russia. If nothing matches, the current
+language is left as it was.
+
+Define `CI18N_NO_PLATFORM_LOCALE` to keep `windows.h` out of your build and
+rely on the environment variables alone.
+
 ### Threads
 
 `CI18N_THREAD_LOCAL_CONTEXT` gives every thread its own context. Read that
@@ -211,8 +273,8 @@ it if you need to hold on to it.
 ### Version check
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
-#error "ci18n 2.0.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 1, 0)
+#error "ci18n 2.1.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -239,6 +301,12 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_last_error()`                     | Why the last call failed |
 | `ci18n_error_string(err)`                | Error code as text    |
 | `ci18n_last_load_stats()`                | What the last load did |
+| `ci18n_plural(key, n)`                   | Plural form for a count |
+| `ci18n_plural_or_key(key, n)`            | Plural form, or the key |
+| `ci18n_plural_category(lang, n)`         | CLDR category for a count |
+| `ci18n_plural_category_name(cat)`        | Category as text      |
+| `ci18n_detect_locale(out, cap)`          | Locale from the system |
+| `ci18n_set_current_best(locale)`         | Best match for a locale |
 
 ## Installing
 
@@ -258,7 +326,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.0.0)
+  GIT_TAG v2.1.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

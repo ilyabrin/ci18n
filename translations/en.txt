@@ -9,3 +9,8 @@ success=Operation completed successfully
 menu_file=File
 menu_edit=Edit
 menu_help=Help
+
+# Plural forms: the bracket suffix is the CLDR category.
+# English needs two of them.
+files[one]=%d file
+files[other]=%d files

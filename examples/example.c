@@ -78,6 +78,51 @@ int main(void) {
     printf("\n=== Dynamic ===\n");
     printf("%s\n", ci18n_get_or_key("dynamic_key"));
 
+    /* Plurals. The count decides which form comes back, and the rules are per
+     * language: English needs two forms, Russian needs three, and 11 and 21
+     * are where a rule that just checks for 1 gets Russian wrong. */
+    printf("\n=== Plurals ===\n");
+    {
+        static const long counts[] = {1, 2, 5, 11, 21};
+        static const char *languages[] = {"en", "ru"};
+        size_t li;
+        size_t ci;
+
+        for (li = 0; li < sizeof(languages) / sizeof(languages[0]); li++) {
+            ci18n_set_current(languages[li]);
+            printf("  %s:", languages[li]);
+
+            for (ci = 0; ci < sizeof(counts) / sizeof(counts[0]); ci++) {
+                printf("   ");
+                printf(ci18n_plural_or_key("files", counts[ci]), (int)counts[ci]);
+            }
+
+            printf("\n");
+        }
+    }
+
+    /* Locale detection. Loading plain "ru" is enough to honour a user whose
+     * environment says ru-RU, because the chain drops subtags as it goes. */
+    printf("\n=== Locale ===\n");
+    {
+        char locale[CI18N_MAX_CODE_LENGTH];
+
+        if (ci18n_detect_locale(locale, sizeof(locale)) > 0) {
+            printf("  environment reports: %s\n", locale);
+        } else {
+            printf("  environment reports nothing usable\n");
+        }
+
+        if (ci18n_set_current_best(NULL)) {
+            printf("  selected from it: %s\n", ci18n_get_current());
+        } else {
+            printf("  nothing loaded matches it, keeping %s\n", ci18n_get_current());
+        }
+
+        printf("  ru-RU resolves to: %s\n",
+               ci18n_set_current_best("ru-RU") ? ci18n_get_current() : "nothing");
+    }
+
     /* You own the buffer. Sizing it to CI18N_MAX_LANGUAGES means the return
      * value can never exceed it, so no clamping is needed here. */
     const char *codes[CI18N_MAX_LANGUAGES];

@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.0.0
+ * ci18n.h - v2.1.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -9,6 +9,8 @@
  *   - Thread-local context option
  *   - No external dependencies, C99 and newer
  *   - Packed storage: an entry costs 16 bytes, not 4352
+ *   - CLDR plural rules, so Russian and Arabic work, not just English
+ *   - Locale detection with a fallback chain: ru-RU to ru
  *
  * USAGE:
  *   #define CI18N_IMPLEMENTATION before including this header in ONE source file
@@ -48,9 +50,9 @@
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 0
+#define CI18N_VERSION_MINOR 1
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.0.0"
+#define CI18N_VERSION_STRING "2.1.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -396,6 +398,138 @@ extern "C"
     CI18N_DEF bool ci18n_is_initialized(void);
 
     /* ============================================================================
+     * Plurals
+     * ============================================================================
+     *
+     * Plural forms are ordinary keys with the category in brackets, so the file
+     * format and the parser are unchanged:
+     *
+     *   files[one]=%d file
+     *   files[other]=%d files
+     *
+     * Russian needs three, and this is why a key-value table alone cannot
+     * translate it:
+     *
+     *   files[one]=%d файл
+     *   files[few]=%d файла
+     *   files[many]=%d файлов
+     *
+     * Then ask for a count rather than a key:
+     *
+     *   printf(ci18n_plural_or_key("files", n), n);
+     *
+     * Which categories a language uses is decided by CLDR, not by you. See
+     * ci18n_plural_category() for which languages are known and what an
+     * unknown one falls back to.
+     * ============================================================================ */
+
+    /*
+     * The CLDR plural categories. Which of them a language actually uses
+     * varies: English has one and other, Russian has one, few and many,
+     * Japanese has only other, Arabic uses all six.
+     */
+    typedef enum ci18n_plural_category
+    {
+        CI18N_PLURAL_ZERO = 0,
+        CI18N_PLURAL_ONE,
+        CI18N_PLURAL_TWO,
+        CI18N_PLURAL_FEW,
+        CI18N_PLURAL_MANY,
+        CI18N_PLURAL_OTHER
+    } ci18n_plural_category_t;
+
+    /*
+     * Which category `count` falls into for a language.
+     *
+     * Rules come from CLDR and are grouped by family, since most languages
+     * share one. Known families cover: English-like one/other, French and
+     * Portuguese where zero is also "one", Russian, Ukrainian and Belarusian,
+     * Polish, Czech and Slovak, Croatian and Serbian, Arabic, Lithuanian,
+     * Latvian, Slovenian, Irish, Romanian, and the languages with no plural
+     * distinction at all such as Japanese, Chinese and Korean.
+     *
+     * Matching uses the primary subtag, so "ru-RU" and "ru_RU.UTF-8" both
+     * resolve as Russian. An unknown language is treated as English-like,
+     * which is the least surprising guess: one for exactly 1, other for
+     * everything else.
+     *
+     * Only integer counts are considered. CLDR distinguishes 1 from 1.0 in
+     * some languages; this does not.
+     *
+     * Returns: the category for that count
+     */
+    CI18N_DEF ci18n_plural_category_t ci18n_plural_category(const char *language_code,
+                                                            long count);
+
+    /*
+     * The category's CLDR name, which is also the bracket suffix to use in a
+     * translation file: "zero", "one", "two", "few", "many" or "other".
+     *
+     * Returns: a static string, never NULL
+     */
+    CI18N_DEF const char *ci18n_plural_category_name(ci18n_plural_category_t category);
+
+    /*
+     * Get the plural form of a key for `count`, in the current language.
+     *
+     * Tries three keys in order, so a translation only has to be as detailed
+     * as it needs to be:
+     *
+     *   key[<category>]   the right form for this count
+     *   key[other]        the catch-all form
+     *   key               a translation with no plural forms at all
+     *
+     * The result points into library storage. See "Pointer lifetime" above.
+     *
+     * Returns: translation string or NULL if none of the three exist
+     */
+    CI18N_DEF const char *ci18n_plural(const char *key, long count);
+
+    /*
+     * Same, falling back to the key itself rather than NULL.
+     *
+     * Returns: translation string, or the key if nothing was found
+     */
+    CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count);
+
+    /* ============================================================================
+     * Locale detection
+     * ============================================================================ */
+
+    /*
+     * The user's locale, as the environment reports it.
+     *
+     * Looks at LC_ALL, then LC_MESSAGES, then LANG. On Windows, where those
+     * are usually unset, it asks the system for the user's default locale
+     * name instead. Define CI18N_NO_PLATFORM_LOCALE to skip that and keep
+     * windows.h out of your build, leaving only the environment variables.
+     *
+     * The result is normalised: the encoding and any modifier are dropped and
+     * underscores become hyphens, so "ru_RU.UTF-8" arrives as "ru-RU". The
+     * "C" and "POSIX" locales report nothing, since they name no language.
+     *
+     * Returns: the length written, or 0 when nothing could be determined
+     */
+    CI18N_DEF size_t ci18n_detect_locale(char *out, size_t capacity);
+
+    /*
+     * Select the best loaded language for a locale, trying less specific
+     * forms as it goes.
+     *
+     * For "ru-RU" that is "ru-RU", then "ru". So a program can load plain
+     * "ru" and still honour a user asking for Russian as spoken in Russia,
+     * which is what makes this worth having over ci18n_set_current().
+     *
+     * Pass NULL to use the locale from ci18n_detect_locale().
+     *
+     * The current language is left alone if nothing matches, so a failed call
+     * cannot leave the program with no language at all.
+     *
+     * Returns: true if a language was selected, false if none matched
+     */
+    CI18N_DEF bool ci18n_set_current_best(const char *locale);
+
+    /* ============================================================================
      * Diagnostics
      * ============================================================================ */
 
@@ -482,6 +616,12 @@ extern "C"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Only for GetUserDefaultLocaleName(). Define CI18N_NO_PLATFORM_LOCALE to
+ * keep this out of your build and rely on the environment variables alone. */
+#if defined(_WIN32) && !defined(CI18N_NO_PLATFORM_LOCALE)
+#include <windows.h>
+#endif
 
 #ifdef CI18N_THREAD_LOCAL_CONTEXT
 /* Pick the storage keyword by compiler, not by OS.
@@ -1581,6 +1721,564 @@ CI18N_DEF size_t ci18n_count(const char *language_code)
 
     ci18n_succeed();
     return ci18n_ctx.languages[lang_idx].count;
+}
+
+/* ============================================================================
+ * Plurals
+ * ============================================================================ */
+
+/*
+ * CLDR groups languages by the plural rule they follow, so the rules live
+ * here as families and the table below maps languages onto them. Writing out
+ * one rule per language would be a few hundred near-duplicates.
+ */
+typedef enum ci18n_plural_family
+{
+    CI18N_PF_OTHER_ONLY,  /* ja, zh, ko: no plural distinction at all */
+    CI18N_PF_ONE_OTHER,   /* en, de, es: one for exactly 1 */
+    CI18N_PF_ZERO_ONE,    /* fr, pt, hi: 0 counts as one too */
+    CI18N_PF_SLAVIC,      /* ru, uk, be */
+    CI18N_PF_POLISH,      /* pl */
+    CI18N_PF_CZECH,       /* cs, sk */
+    CI18N_PF_BALKAN,      /* hr, sr, bs */
+    CI18N_PF_ARABIC,      /* ar */
+    CI18N_PF_LITHUANIAN,  /* lt */
+    CI18N_PF_LATVIAN,     /* lv */
+    CI18N_PF_SLOVENIAN,   /* sl */
+    CI18N_PF_IRISH,       /* ga */
+    CI18N_PF_ROMANIAN     /* ro */
+} ci18n_plural_family_t;
+
+typedef struct ci18n_plural_rule
+{
+    const char *language;
+    ci18n_plural_family_t family;
+} ci18n_plural_rule_t;
+
+/*
+ * Languages by primary subtag. Not exhaustive, and deliberately so: the point
+ * is to cover what people actually translate into, and to fall back to the
+ * English rule rather than pretend.
+ */
+static const ci18n_plural_rule_t ci18n_plural_rules[] = {
+    /* No plural distinction. */
+    {"ja", CI18N_PF_OTHER_ONLY}, {"zh", CI18N_PF_OTHER_ONLY},
+    {"ko", CI18N_PF_OTHER_ONLY}, {"vi", CI18N_PF_OTHER_ONLY},
+    {"th", CI18N_PF_OTHER_ONLY}, {"id", CI18N_PF_OTHER_ONLY},
+    {"ms", CI18N_PF_OTHER_ONLY}, {"lo", CI18N_PF_OTHER_ONLY},
+    {"my", CI18N_PF_OTHER_ONLY}, {"km", CI18N_PF_OTHER_ONLY},
+    {"yo", CI18N_PF_OTHER_ONLY}, {"ig", CI18N_PF_OTHER_ONLY},
+
+    /* Zero behaves like one. */
+    {"fr", CI18N_PF_ZERO_ONE}, {"pt", CI18N_PF_ZERO_ONE},
+    {"hi", CI18N_PF_ZERO_ONE}, {"bn", CI18N_PF_ZERO_ONE},
+    {"fa", CI18N_PF_ZERO_ONE}, {"hy", CI18N_PF_ZERO_ONE},
+    {"gu", CI18N_PF_ZERO_ONE}, {"kn", CI18N_PF_ZERO_ONE},
+    {"zu", CI18N_PF_ZERO_ONE}, {"mr", CI18N_PF_ZERO_ONE},
+
+    /* Three forms, east Slavic. */
+    {"ru", CI18N_PF_SLAVIC}, {"uk", CI18N_PF_SLAVIC}, {"be", CI18N_PF_SLAVIC},
+
+    {"pl", CI18N_PF_POLISH},
+    {"cs", CI18N_PF_CZECH}, {"sk", CI18N_PF_CZECH},
+    {"hr", CI18N_PF_BALKAN}, {"sr", CI18N_PF_BALKAN}, {"bs", CI18N_PF_BALKAN},
+    {"ar", CI18N_PF_ARABIC},
+    {"lt", CI18N_PF_LITHUANIAN},
+    {"lv", CI18N_PF_LATVIAN},
+    {"sl", CI18N_PF_SLOVENIAN},
+    {"ga", CI18N_PF_IRISH},
+    {"ro", CI18N_PF_ROMANIAN},
+
+    /* One for exactly 1. The default, so these are here for documentation as
+     * much as for lookup. */
+    {"en", CI18N_PF_ONE_OTHER}, {"de", CI18N_PF_ONE_OTHER},
+    {"nl", CI18N_PF_ONE_OTHER}, {"sv", CI18N_PF_ONE_OTHER},
+    {"da", CI18N_PF_ONE_OTHER}, {"no", CI18N_PF_ONE_OTHER},
+    {"nb", CI18N_PF_ONE_OTHER}, {"nn", CI18N_PF_ONE_OTHER},
+    {"fi", CI18N_PF_ONE_OTHER}, {"et", CI18N_PF_ONE_OTHER},
+    {"el", CI18N_PF_ONE_OTHER}, {"es", CI18N_PF_ONE_OTHER},
+    {"it", CI18N_PF_ONE_OTHER}, {"hu", CI18N_PF_ONE_OTHER},
+    {"bg", CI18N_PF_ONE_OTHER}, {"sq", CI18N_PF_ONE_OTHER},
+    {"ka", CI18N_PF_ONE_OTHER}, {"eu", CI18N_PF_ONE_OTHER},
+    {"tr", CI18N_PF_ONE_OTHER}, {"az", CI18N_PF_ONE_OTHER},
+    {"kk", CI18N_PF_ONE_OTHER}, {"uz", CI18N_PF_ONE_OTHER},
+    {"ky", CI18N_PF_ONE_OTHER}, {"mn", CI18N_PF_ONE_OTHER},
+    {"ne", CI18N_PF_ONE_OTHER}, {"sw", CI18N_PF_ONE_OTHER},
+    {"af", CI18N_PF_ONE_OTHER}, {"he", CI18N_PF_ONE_OTHER},
+    {"ta", CI18N_PF_ONE_OTHER}, {"te", CI18N_PF_ONE_OTHER},
+    {"ml", CI18N_PF_ONE_OTHER}, {"si", CI18N_PF_ONE_OTHER},
+    {"ur", CI18N_PF_ONE_OTHER}, {"ca", CI18N_PF_ONE_OTHER}
+};
+
+/* Length of the primary subtag, the part before any '-', '_' or '.'. */
+static size_t ci18n_primary_subtag_len(const char *code)
+{
+    size_t i = 0;
+
+    while (code[i] != '\0' && code[i] != '-' && code[i] != '_' && code[i] != '.')
+    {
+        i++;
+    }
+
+    return i;
+}
+
+static ci18n_plural_family_t ci18n_plural_family(const char *language_code)
+{
+    size_t len;
+    size_t i;
+
+    if (!language_code)
+    {
+        return CI18N_PF_ONE_OTHER;
+    }
+
+    len = ci18n_primary_subtag_len(language_code);
+
+    for (i = 0; i < sizeof(ci18n_plural_rules) / sizeof(ci18n_plural_rules[0]); i++)
+    {
+        const char *candidate = ci18n_plural_rules[i].language;
+
+        if (strlen(candidate) == len && strncmp(candidate, language_code, len) == 0)
+        {
+            return ci18n_plural_rules[i].family;
+        }
+    }
+
+    /* Unknown language: guess the commonest rule rather than refuse. */
+    return CI18N_PF_ONE_OTHER;
+}
+
+CI18N_DEF ci18n_plural_category_t ci18n_plural_category(const char *language_code, long count)
+{
+    /* Rules are written in terms of the absolute value; a negative count of
+     * things is still that many things. */
+    unsigned long n = (unsigned long)(count < 0 ? -count : count);
+    unsigned long mod10 = n % 10;
+    unsigned long mod100 = n % 100;
+
+    switch (ci18n_plural_family(language_code))
+    {
+    case CI18N_PF_OTHER_ONLY:
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_ZERO_ONE:
+        return (n == 0 || n == 1) ? CI18N_PLURAL_ONE : CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_SLAVIC:
+        if (mod10 == 1 && mod100 != 11)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14))
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_MANY;
+
+    case CI18N_PF_POLISH:
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14))
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_MANY;
+
+    case CI18N_PF_CZECH:
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (n >= 2 && n <= 4)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_BALKAN:
+        if (mod10 == 1 && mod100 != 11)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14))
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_ARABIC:
+        if (n == 0)
+        {
+            return CI18N_PLURAL_ZERO;
+        }
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (n == 2)
+        {
+            return CI18N_PLURAL_TWO;
+        }
+        if (mod100 >= 3 && mod100 <= 10)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        if (mod100 >= 11 && mod100 <= 99)
+        {
+            return CI18N_PLURAL_MANY;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_LITHUANIAN:
+        if (mod10 == 1 && (mod100 < 11 || mod100 > 19))
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (mod10 >= 2 && mod10 <= 9 && (mod100 < 11 || mod100 > 19))
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_LATVIAN:
+        if (mod10 == 0 || (mod100 >= 11 && mod100 <= 19))
+        {
+            return CI18N_PLURAL_ZERO;
+        }
+        if (mod10 == 1 && mod100 != 11)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_SLOVENIAN:
+        if (mod100 == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (mod100 == 2)
+        {
+            return CI18N_PLURAL_TWO;
+        }
+        if (mod100 == 3 || mod100 == 4)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_IRISH:
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (n == 2)
+        {
+            return CI18N_PLURAL_TWO;
+        }
+        if (n >= 3 && n <= 6)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        if (n >= 7 && n <= 10)
+        {
+            return CI18N_PLURAL_MANY;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_ROMANIAN:
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (n == 0 || (mod100 >= 1 && mod100 <= 19))
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_ONE_OTHER:
+    default:
+        return (n == 1) ? CI18N_PLURAL_ONE : CI18N_PLURAL_OTHER;
+    }
+}
+
+CI18N_DEF const char *ci18n_plural_category_name(ci18n_plural_category_t category)
+{
+    switch (category)
+    {
+    case CI18N_PLURAL_ZERO:
+        return "zero";
+    case CI18N_PLURAL_ONE:
+        return "one";
+    case CI18N_PLURAL_TWO:
+        return "two";
+    case CI18N_PLURAL_FEW:
+        return "few";
+    case CI18N_PLURAL_MANY:
+        return "many";
+    case CI18N_PLURAL_OTHER:
+        return "other";
+    }
+
+    return "other";
+}
+
+/* Build "key[suffix]", or report that it will not fit. */
+static bool ci18n_plural_key(char *out, size_t capacity, const char *key, const char *suffix)
+{
+    size_t key_len = strlen(key);
+    size_t suffix_len = strlen(suffix);
+
+    if (key_len + suffix_len + 3 > capacity)
+    {
+        return false;
+    }
+
+    memcpy(out, key, key_len);
+    out[key_len] = '[';
+    memcpy(out + key_len + 1, suffix, suffix_len);
+    out[key_len + 1 + suffix_len] = ']';
+    out[key_len + 2 + suffix_len] = '\0';
+    return true;
+}
+
+CI18N_DEF const char *ci18n_plural(const char *key, long count)
+{
+    char buffer[CI18N_MAX_KEY_LENGTH];
+    ci18n_plural_category_t category;
+    const char *result;
+
+    if (!ci18n_ctx.initialized)
+    {
+        ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+        return NULL;
+    }
+
+    if (!key)
+    {
+        ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return NULL;
+    }
+
+    category = ci18n_plural_category(ci18n_ctx.current_language, count);
+
+    /* The exact form for this count. */
+    if (ci18n_plural_key(buffer, sizeof(buffer), key, ci18n_plural_category_name(category)))
+    {
+        result = ci18n_get(buffer);
+        if (result)
+        {
+            return result;
+        }
+    }
+
+    /* The catch-all form, for a translation that only bothered with two. */
+    if (category != CI18N_PLURAL_OTHER &&
+        ci18n_plural_key(buffer, sizeof(buffer), key, "other"))
+    {
+        result = ci18n_get(buffer);
+        if (result)
+        {
+            return result;
+        }
+    }
+
+    /* A translation with no plural forms at all. */
+    result = ci18n_get(key);
+    if (result)
+    {
+        return result;
+    }
+
+    ci18n_fail(CI18N_ERR_KEY_NOT_FOUND);
+    return NULL;
+}
+
+CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count)
+{
+    const char *result = ci18n_plural(key, count);
+
+    return result ? result : key;
+}
+
+/* ============================================================================
+ * Locale detection
+ * ============================================================================ */
+
+/*
+ * Copy a locale name, dropping everything the language tag does not need.
+ *
+ * "ru_RU.UTF-8@euro" becomes "ru-RU": the encoding and the modifier say
+ * nothing about which translation to pick, and underscores are spelled as
+ * hyphens so one form reaches the caller.
+ */
+static size_t ci18n_normalize_locale(char *out, size_t capacity, const char *locale)
+{
+    size_t n = 0;
+    size_t i;
+
+    if (capacity == 0)
+    {
+        return 0;
+    }
+
+    for (i = 0; locale[i] != '\0'; i++)
+    {
+        char c = locale[i];
+
+        if (c == '.' || c == '@')
+        {
+            break;
+        }
+
+        if (n + 1 >= capacity)
+        {
+            break;
+        }
+
+        out[n++] = (c == '_') ? '-' : c;
+    }
+
+    out[n] = '\0';
+
+    /* "C" and "POSIX" are the absence of a locale, not a language. */
+    if (strcmp(out, "C") == 0 || strcmp(out, "POSIX") == 0)
+    {
+        out[0] = '\0';
+        return 0;
+    }
+
+    return n;
+}
+
+CI18N_DEF size_t ci18n_detect_locale(char *out, size_t capacity)
+{
+    static const char *variables[] = {"LC_ALL", "LC_MESSAGES", "LANG"};
+    size_t i;
+
+    if (!out || capacity == 0)
+    {
+        ci18n_fail(CI18N_ERR_INVALID_ARGUMENT);
+        return 0;
+    }
+
+    out[0] = '\0';
+
+    /* Environment first, on every platform: it is what a user overriding the
+     * language for one program will have set. */
+    for (i = 0; i < sizeof(variables) / sizeof(variables[0]); i++)
+    {
+        const char *value = getenv(variables[i]);
+
+        if (value && value[0] != '\0')
+        {
+            size_t len = ci18n_normalize_locale(out, capacity, value);
+
+            if (len > 0)
+            {
+                ci18n_succeed();
+                return len;
+            }
+        }
+    }
+
+#if defined(_WIN32) && !defined(CI18N_NO_PLATFORM_LOCALE)
+    /* Those variables are normally unset on Windows, so ask the system. */
+    {
+        wchar_t wide[LOCALE_NAME_MAX_LENGTH];
+        int count = GetUserDefaultLocaleName(wide, LOCALE_NAME_MAX_LENGTH);
+
+        if (count > 0)
+        {
+            char narrow[LOCALE_NAME_MAX_LENGTH];
+            int j;
+
+            /* Locale names are ASCII, so a byte-wise narrowing is enough and
+             * avoids dragging in a conversion function. */
+            for (j = 0; j < count && j < (int)sizeof(narrow) - 1; j++)
+            {
+                narrow[j] = (wide[j] < 128) ? (char)wide[j] : '?';
+            }
+            narrow[j] = '\0';
+
+            if (narrow[0] != '\0')
+            {
+                size_t len = ci18n_normalize_locale(out, capacity, narrow);
+
+                if (len > 0)
+                {
+                    ci18n_succeed();
+                    return len;
+                }
+            }
+        }
+    }
+#endif
+
+    ci18n_succeed();
+    return 0;
+}
+
+CI18N_DEF bool ci18n_set_current_best(const char *locale)
+{
+    char candidate[CI18N_MAX_CODE_LENGTH];
+    char detected[CI18N_MAX_CODE_LENGTH];
+    size_t len;
+
+    if (!ci18n_ctx.initialized)
+    {
+        return ci18n_fail(CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!locale)
+    {
+        if (ci18n_detect_locale(detected, sizeof(detected)) == 0)
+        {
+            return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
+        }
+
+        locale = detected;
+    }
+
+    if (!ci18n_code_fits(locale))
+    {
+        return ci18n_fail(CI18N_ERR_CODE_TOO_LONG);
+    }
+
+    ci18n_copy(candidate, sizeof(candidate), locale);
+    len = strlen(candidate);
+
+    /* Walk from the most specific form to the least: ru-RU, then ru. Both
+     * separators are accepted, since a caller may pass either spelling. */
+    for (;;)
+    {
+        if (len > 0 && ci18n_find_language(candidate) >= 0)
+        {
+            ci18n_copy(ci18n_ctx.current_language, sizeof(ci18n_ctx.current_language),
+                       candidate);
+            ci18n_succeed();
+            return true;
+        }
+
+        while (len > 0 && candidate[len - 1] != '-' && candidate[len - 1] != '_')
+        {
+            len--;
+        }
+
+        if (len == 0)
+        {
+            break;
+        }
+
+        /* Drop the separator too, then try the shorter tag. */
+        len--;
+        candidate[len] = '\0';
+    }
+
+    return ci18n_fail(CI18N_ERR_LANGUAGE_NOT_FOUND);
 }
 
 CI18N_DEF bool ci18n_is_initialized(void)

@@ -8,10 +8,61 @@ Because this is a single-header library, upgrading means replacing one file.
 Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
-#error "ci18n 2.0.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 1, 0)
+#error "ci18n 2.1.0 or newer is required"
 #endif
 ```
+
+## 2.1.0 - 2026-09-22
+
+Plural rules and locale detection. Both additive: nothing existing changes.
+
+### Added
+
+- `ci18n_plural()` and `ci18n_plural_or_key()`, which pick a translation by
+  count instead of by key alone. Plural forms are ordinary keys with the
+  category in brackets, so the file format and the parser are untouched:
+
+  ```ini
+  files[one]=%d файл
+  files[few]=%d файла
+  files[many]=%d файлов
+  ```
+
+  Lookup tries `key[category]`, then `key[other]`, then plain `key`, so a
+  translation only has to be as detailed as it needs to be.
+
+- `ci18n_plural_category()` and `ci18n_plural_category_name()`, for callers
+  that want the category itself.
+
+- CLDR plural rules for 13 families, covering: English-like one and other;
+  French and Portuguese, where zero counts as one; Russian, Ukrainian and
+  Belarusian; Polish; Czech and Slovak; Croatian and Serbian; Arabic, which
+  uses all six categories; Lithuanian; Latvian; Slovenian; Irish; Romanian;
+  and the languages with no plural distinction at all, such as Japanese,
+  Chinese and Korean. An unknown language is treated as English-like rather
+  than refused.
+
+- `ci18n_detect_locale()`, which reads `LC_ALL`, `LC_MESSAGES` and `LANG`, and
+  on Windows asks the system for the user's default locale name. The result is
+  normalised: `ru_RU.UTF-8` arrives as `ru-RU`, and `C` or `POSIX` report
+  nothing because they name no language. Define `CI18N_NO_PLATFORM_LOCALE` to
+  keep `windows.h` out of the build and use only the environment.
+
+- `ci18n_set_current_best()`, which selects the best loaded language for a
+  locale by dropping subtags as it goes: `ru-RU` then `ru`. So a program can
+  ship a plain `ru` translation and still honour a user asking for Russian as
+  spoken in Russia. A failed selection leaves the current language alone,
+  rather than leaving the program with none.
+
+- Plural forms in the bundled translation files, and both features in the
+  example.
+
+### Notes
+
+Only integer counts are considered. CLDR distinguishes 1 from 1.0 in some
+languages; this does not. Negative counts use their absolute value, since
+minus three things is still three things.
 
 ## 2.0.0 - 2026-09-22
 
