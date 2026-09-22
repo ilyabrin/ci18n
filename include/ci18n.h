@@ -116,8 +116,12 @@ extern "C"
 #define CI18N_MAX_KEYS_PER_LANGUAGE 1024
 #endif
 
+/* Wide enough to hold a maximum key and a maximum value on one line, plus the
+ * separator and some slack. When this is not larger than
+ * CI18N_MAX_VALUE_LENGTH, the line limit bites first and a long value can
+ * never reach its own limit. */
 #ifndef CI18N_MAX_LINE_LENGTH
-#define CI18N_MAX_LINE_LENGTH 4096
+#define CI18N_MAX_LINE_LENGTH (CI18N_MAX_KEY_LENGTH + CI18N_MAX_VALUE_LENGTH + 8)
 #endif
 
 /* Includes the terminator, so the default fits a 31 character code. Long
@@ -881,11 +885,20 @@ CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepa
 
         line_number++;
 
-        /* A line that filled the buffer without a terminator was cut, and its
-         * tail will arrive as a separate line on the next read. */
+        /* fgets() stops at the buffer, so a line longer than it would come
+         * back on the next read and be parsed as a line of its own, usually
+         * without a separator, which then looked like a malformed line that
+         * was never in the file. Swallow the tail instead. */
         if (len == sizeof(line) - 1 && line[len - 1] != '\n' && line[len - 1] != '\r')
         {
+            int discarded;
+
             ci18n_ctx.load_stats.lines_truncated++;
+
+            while ((discarded = fgetc(file)) != EOF && discarded != '\n')
+            {
+                /* nothing: the rest of this line cannot be stored anyway */
+            }
         }
 
         /* Strip the line terminator. One loop covers LF, CRLF and a lone CR,

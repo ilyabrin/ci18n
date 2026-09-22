@@ -59,6 +59,37 @@ make test EXTRA_CFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -
 Note that MinGW ships without the sanitizer runtimes, so on Windows this needs
 WSL, MSVC or a Linux box.
 
+### Fuzzing
+
+The parser takes bytes the program did not write, so it is fuzzed as well as
+unit tested. [tests/fuzz_load_buffer.c](tests/fuzz_load_buffer.c) drives
+`ci18n_load_from_buffer()`, then reads everything back through the public API,
+using the same input as lookup keys. It also asserts that the load stats add
+up, so a miscounted line is a crash rather than a wrong number nobody checks.
+
+libFuzzer comes with clang:
+
+```bash
+make fuzz-run                  # 60 seconds by default
+make fuzz-run FUZZ_SECONDS=600
+```
+
+Seeds live in [tests/fuzz_corpus/](tests/fuzz_corpus/) and are the inputs that
+have caused trouble here before: a BOM, CRLF, a lone CR, an over-long line, an
+over-long key, malformed lines, binary bytes. Findings are written to
+`fuzz_findings/`, so the committed seeds are never modified. Add a seed
+whenever you fix a parser bug.
+
+To reproduce one input, with any compiler and no libFuzzer:
+
+```bash
+make fuzz-replay INPUT=tests/fuzz_corpus/long_line
+make fuzz-corpus   # replays every seed
+```
+
+`make fuzz-corpus` is the fallback check on a toolchain without libFuzzer,
+which includes MinGW.
+
 ## Adding a test
 
 Tests live in [tests/test_ci18n.c](tests/test_ci18n.c) and use a few macros at

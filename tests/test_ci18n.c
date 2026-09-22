@@ -1138,19 +1138,58 @@ TEST(test_load_stats_reports_truncation)
     ASSERT(ci18n_last_error() == CI18N_ERR_PARSE);
 
     st = ci18n_last_load_stats();
-    ASSERT(st->keys_truncated == 1);
 
-    /* The over-long value never reaches the value limit, because
-     * CI18N_MAX_LINE_LENGTH and CI18N_MAX_VALUE_LENGTH are both 4096 by
-     * default and the line limit bites first. The line is reported as
-     * truncated, and its tail arrives as a further line with no separator,
-     * which is then counted as malformed. Raise CI18N_MAX_LINE_LENGTH above
-     * CI18N_MAX_VALUE_LENGTH to make values_truncated reachable at all. */
+    /* The default line buffer holds a maximum key and a maximum value at
+     * once, so each limit is reported by its own counter and neither line is
+     * cut as a whole. */
+    ASSERT(st->keys_truncated == 1);
+    ASSERT(st->values_truncated == 1);
+    ASSERT(st->lines_truncated == 0);
+    ASSERT(st->lines_read == 2);
+    ASSERT(st->entries_loaded == 2);
+    ASSERT(st->lines_malformed == 0);
+
+    remove(TEMP_FILE);
+    ci18n_free();
+}
+
+TEST(test_load_stats_over_long_line)
+{
+    static char line[CI18N_MAX_LINE_LENGTH * 2];
+    const ci18n_load_stats_t *st;
+    size_t pos = 0;
+
+    ci18n_init();
+
+    /* A single line longer than the whole line buffer, followed by a good
+     * one. The tail of the long line used to come back from fgets() as a
+     * separate line with no separator and be counted as malformed, inventing
+     * a parse error that was not in the file. */
+    line[pos++] = 'k';
+    line[pos++] = '=';
+    memset(line + pos, 'v', CI18N_MAX_LINE_LENGTH + 64);
+    pos += CI18N_MAX_LINE_LENGTH + 64;
+    line[pos++] = '\n';
+
+    memcpy(line + pos, "good=yes\n", 9);
+    pos += 9;
+
+    ASSERT(write_file(TEMP_FILE, line, pos));
+    ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
+
+    /* Checked before anything else runs: a successful call clears the code. */
+    ASSERT(ci18n_last_error() == CI18N_ERR_PARSE);
+
+    st = ci18n_last_load_stats();
     ASSERT(st->lines_truncated == 1);
-    ASSERT(st->values_truncated == 0);
-    ASSERT(st->lines_read == 3);
-    ASSERT(st->lines_malformed == 1);
-    ASSERT(st->first_malformed_line == 3);
+    ASSERT(st->lines_read == 2);
+    ASSERT(st->lines_malformed == 0);
+    ASSERT(st->entries_loaded == 2);
+
+    /* Both entries are there: the long one shortened, the next one intact. */
+    ci18n_set_current("en");
+    ASSERT(ci18n_get("k") != NULL);
+    ASSERT_STR_EQ(ci18n_get("good"), "yes");
 
     remove(TEMP_FILE);
     ci18n_free();
@@ -1260,6 +1299,7 @@ int main(void)
     RUN_TEST(test_load_stats_clean_file);
     RUN_TEST(test_load_stats_malformed_lines);
     RUN_TEST(test_load_stats_reports_truncation);
+    RUN_TEST(test_load_stats_over_long_line);
     RUN_TEST(test_load_stats_from_buffer);
     RUN_TEST(test_load_stats_reset_between_loads);
 

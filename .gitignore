@@ -16,6 +16,17 @@ test_ci18n
 test_ci18n.exe
 test_thread_local
 test_thread_local.exe
+fuzz_load_buffer
+fuzz_load_buffer.exe
+fuzz_replay
+fuzz_replay.exe
+
+# Fuzzing output. tests/fuzz_corpus holds the committed seeds and stays.
+fuzz_findings/
+crash-*
+leak-*
+timeout-*
+oom-*
 
 # Test fixtures, left behind only if a test fails early
 ci18n_test_tmp.txt

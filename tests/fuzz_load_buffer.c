@@ -1,0 +1,149 @@
+/*
+ * Fuzz target for the translation parser.
+ *
+ *   make fuzz          build with clang and libFuzzer
+ *   make fuzz-run      build, then fuzz for CI18N_FUZZ_SECONDS seconds
+ *
+ * ci18n_load_from_buffer() takes whatever bytes a program hands it, which for
+ * a translation file is often not something the program wrote. Everything the
+ * file loader does to a line, the buffer loader does too, so fuzzing this one
+ * entry point covers the parser without touching the filesystem on every run.
+ *
+ * Replaying one input without libFuzzer:
+ *
+ *   make fuzz-replay INPUT=tests/fuzz_corpus/crlf
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#define CI18N_IMPLEMENTATION
+#include "ci18n.h"
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*
+ * One round trip: load the bytes, then use what came out of them.
+ *
+ * Looking things up afterwards matters as much as the parse. A key that was
+ * stored truncated, or a value the trimmer walked off the end of, only shows
+ * up when something reads it back.
+ */
+static void fuzz_one(const uint8_t *data, size_t size)
+{
+    const ci18n_load_stats_t *stats;
+    const char *codes[4];
+    size_t total;
+    size_t i;
+
+    if (!ci18n_init())
+    {
+        return;
+    }
+
+    ci18n_load_from_buffer("fz", (const char *)data, size);
+
+    /* The stats pointer is always valid, and the counters have to stay
+     * consistent with each other whatever the input was. */
+    stats = ci18n_last_load_stats();
+    if (stats->entries_loaded + stats->lines_skipped + stats->lines_malformed !=
+        stats->lines_read)
+    {
+        /* Unreachable unless the accounting is wrong, and worth a crash in a
+         * fuzz build so it cannot pass silently. */
+        abort();
+    }
+
+    if (stats->lines_malformed == 0 && stats->first_malformed_line != 0)
+    {
+        abort();
+    }
+
+    if (ci18n_count("fz") > CI18N_MAX_KEYS_PER_LANGUAGE)
+    {
+        abort();
+    }
+
+    ci18n_set_current("fz");
+
+    /* Read every key back through the public API, using the bytes as keys too
+     * so lookups see the same hostile input. */
+    ci18n_has("");
+    ci18n_get("");
+    ci18n_get_or_key("missing");
+
+    if (size > 0)
+    {
+        char key[CI18N_MAX_KEY_LENGTH];
+        size_t len = size < sizeof(key) - 1 ? size : sizeof(key) - 1;
+
+        memcpy(key, data, len);
+        key[len] = '\0';
+
+        ci18n_get(key);
+        ci18n_has(key);
+        ci18n_get_or_key(key);
+        ci18n_set("fz", key, "v");
+        ci18n_remove("fz", key);
+    }
+
+    total = ci18n_get_languages(codes, sizeof(codes) / sizeof(codes[0]));
+    for (i = 0; i < total && i < sizeof(codes) / sizeof(codes[0]); i++)
+    {
+        ci18n_count(codes[i]);
+    }
+
+    /* A second load into the same language exercises the merge path, where
+     * the entry array is reallocated under pointers taken earlier. */
+    ci18n_load_from_buffer("fz", (const char *)data, size);
+
+    ci18n_error_string(ci18n_last_error());
+
+    ci18n_free();
+}
+
+#ifdef CI18N_FUZZ_REPLAY
+
+/* Standalone replay, so a crashing input can be re-run under a debugger or a
+ * sanitizer without a libFuzzer build. */
+int main(int argc, char **argv)
+{
+    static uint8_t buffer[1 << 20];
+    FILE *f;
+    size_t size;
+
+    if (argc < 2)
+    {
+        fprintf(stderr, "usage: %s <input-file>\n", argv[0]);
+        return 2;
+    }
+
+    f = fopen(argv[1], "rb");
+    if (!f)
+    {
+        fprintf(stderr, "cannot open %s\n", argv[1]);
+        return 2;
+    }
+
+    size = fread(buffer, 1, sizeof(buffer), f);
+    fclose(f);
+
+    fuzz_one(buffer, size);
+    printf("replayed %s, %u bytes, no crash\n", argv[1], (unsigned int)size);
+    return 0;
+}
+
+#else
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
+{
+    fuzz_one(data, size);
+    return 0;
+}
+
+#endif

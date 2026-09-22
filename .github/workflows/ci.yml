@@ -108,6 +108,41 @@ jobs:
           make clean
           make CC=${{ matrix.compiler }}
 
+  # The parser reads bytes the program did not write, so it gets fuzzed rather
+  # than only unit tested.
+  fuzz:
+    name: fuzz the parser
+    runs-on: ubuntu-latest
+
+    env:
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang make
+
+      - name: Fuzz
+        run: make fuzz-run FUZZ_SECONDS=90
+
+      # Same target the seeds are checked with on a toolchain without
+      # libFuzzer, which keeps them runnable everywhere.
+      - name: Replay the seed corpus without libFuzzer
+        run: make clean && make fuzz-corpus CC=clang
+
+      - name: Upload findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: |
+            fuzz_findings/
+            crash-*
+            leak-*
+            timeout-*
+          if-no-files-found: ignore
+
   sanitizers:
     name: ${{ matrix.sanitizer }} / ${{ matrix.compiler }}
     runs-on: ubuntu-latest
