@@ -1287,6 +1287,208 @@ TEST(test_plural_guards)
 }
 
 /* ============================================================================
+ * Interpolation
+ * ============================================================================ */
+
+TEST(test_format_substitutes_by_name)
+{
+    char out[128];
+
+    ci18n_init();
+    ci18n_set("en", "greeting", "Hello, {name}! You have {count} messages.");
+    ci18n_set_current("en");
+
+    ASSERT(ci18n_format(out, sizeof(out), "greeting",
+                        "name", "Ilya", "count", "3", NULL) == 33);
+    ASSERT_STR_EQ(out, "Hello, Ilya! You have 3 messages.");
+
+    ci18n_free();
+}
+
+TEST(test_format_order_is_the_translations_business)
+{
+    char out[128];
+
+    ci18n_init();
+
+    /* The same two values, placed differently by each translation. This is
+     * the thing positional formatting cannot express. */
+    ci18n_set("en", "moved", "{first} then {second}");
+    ci18n_set("ru", "moved", "{second}, а раньше {first}");
+
+    ci18n_set_current("en");
+    ci18n_format(out, sizeof(out), "moved", "first", "A", "second", "B", NULL);
+    ASSERT_STR_EQ(out, "A then B");
+
+    ci18n_set_current("ru");
+    ci18n_format(out, sizeof(out), "moved", "first", "A", "second", "B", NULL);
+    ASSERT_STR_EQ(out, "B, а раньше A");
+
+    ci18n_free();
+}
+
+TEST(test_format_repeated_unused_and_missing)
+{
+    char out[128];
+
+    ci18n_init();
+
+    /* Used twice. ci18n_set_current() only works once the language exists,
+     * so the first entry has to come first. */
+    ci18n_set("en", "twice", "{x} and {x}");
+    ci18n_set_current("en");
+    ci18n_format(out, sizeof(out), "twice", "x", "same", NULL);
+    ASSERT_STR_EQ(out, "same and same");
+
+    /* A pair the translation never mentions is simply not used. */
+    ci18n_set("en", "one_only", "just {x}");
+    ci18n_format(out, sizeof(out), "one_only", "x", "this", "unused", "value", NULL);
+    ASSERT_STR_EQ(out, "just this");
+
+    /* No matching pair: the placeholder stays visible rather than vanishing,
+     * so a typo in a translation is something you can see. */
+    ci18n_set("en", "typo", "hello {nmae}");
+    ci18n_format(out, sizeof(out), "typo", "name", "Ilya", NULL);
+    ASSERT_STR_EQ(out, "hello {nmae}");
+
+    /* A NULL value is an empty string, not a crash. */
+    ci18n_set("en", "nullable", "[{x}]");
+    ci18n_format(out, sizeof(out), "nullable", "x", NULL, NULL);
+    ASSERT_STR_EQ(out, "[]");
+
+    ci18n_free();
+}
+
+TEST(test_format_braces_and_malformed_placeholders)
+{
+    char out[128];
+
+    ci18n_init();
+
+    ci18n_set("en", "escaped", "{{x}} stays, {x} does not");
+    ci18n_set_current("en");
+    ci18n_format(out, sizeof(out), "escaped", "x", "V", NULL);
+    ASSERT_STR_EQ(out, "{x} stays, V does not");
+
+    /* A lone closing brace is literal. */
+    ci18n_set("en", "lone_close", "a } b");
+    ci18n_format(out, sizeof(out), "lone_close", NULL);
+    ASSERT_STR_EQ(out, "a } b");
+
+    /* An unterminated placeholder is literal too, rather than swallowing the
+     * rest of the string into a name. */
+    ci18n_set("en", "unterminated", "a {b c");
+    ci18n_format(out, sizeof(out), "unterminated", "b", "X", NULL);
+    ASSERT_STR_EQ(out, "a {b c");
+
+    /* An empty name matches nothing and stays as written. */
+    ci18n_set("en", "empty_name", "a {} b");
+    ci18n_format(out, sizeof(out), "empty_name", "", "X", NULL);
+    ASSERT_STR_EQ(out, "a X b");
+
+    ci18n_free();
+}
+
+TEST(test_format_truncation_and_measuring)
+{
+    char out[8];
+    size_t needed;
+
+    ci18n_init();
+    ci18n_set("en", "long", "0123456789abcdef");
+    ci18n_set_current("en");
+
+    /* snprintf semantics: the full length comes back, the buffer holds what
+     * fits, and it is always terminated. */
+    needed = ci18n_format(out, sizeof(out), "long", NULL);
+    ASSERT(needed == 16);
+    ASSERT(strlen(out) == 7);
+    ASSERT_STR_EQ(out, "0123456");
+
+    /* Measuring without writing, which is how a caller sizes a buffer. */
+    ASSERT(ci18n_format(NULL, 0, "long", NULL) == 16);
+
+    /* A capacity of one leaves room for the terminator alone. */
+    needed = ci18n_format(out, 1, "long", NULL);
+    ASSERT(needed == 16);
+    ASSERT(out[0] == '\0');
+
+    /* A key that does not exist writes nothing and reports nothing. */
+    out[0] = 'x';
+    ASSERT(ci18n_format(out, sizeof(out), "absent", NULL) == 0);
+    ASSERT(out[0] == '\0');
+
+    ci18n_free();
+}
+
+TEST(test_format_plural_provides_count)
+{
+    char out[128];
+
+    ci18n_init();
+
+    ci18n_set("ru", "files[one]", "{count} файл");
+    ci18n_set("ru", "files[few]", "{count} файла");
+    ci18n_set("ru", "files[many]", "{count} файлов");
+    ci18n_set_current("ru");
+
+    /* The count fills {count} without being passed as a pair, and picks the
+     * form at the same time. */
+    ci18n_format_plural(out, sizeof(out), "files", 1, NULL);
+    ASSERT_STR_EQ(out, "1 файл");
+
+    ci18n_format_plural(out, sizeof(out), "files", 2, NULL);
+    ASSERT_STR_EQ(out, "2 файла");
+
+    ci18n_format_plural(out, sizeof(out), "files", 5, NULL);
+    ASSERT_STR_EQ(out, "5 файлов");
+
+    ci18n_format_plural(out, sizeof(out), "files", 21, NULL);
+    ASSERT_STR_EQ(out, "21 файл");
+
+    ci18n_format_plural(out, sizeof(out), "files", 111, NULL);
+    ASSERT_STR_EQ(out, "111 файлов");
+
+    /* Negative counts render with a sign and use the absolute value's form. */
+    ci18n_format_plural(out, sizeof(out), "files", -2, NULL);
+    ASSERT_STR_EQ(out, "-2 файла");
+
+    /* Zero. */
+    ci18n_format_plural(out, sizeof(out), "files", 0, NULL);
+    ASSERT_STR_EQ(out, "0 файлов");
+
+    ci18n_free();
+}
+
+TEST(test_format_plural_mixes_pairs_and_overrides_count)
+{
+    char out[128];
+
+    ci18n_init();
+    ci18n_set("en", "inbox[one]", "{name} has {count} message");
+    ci18n_set("en", "inbox[other]", "{name} has {count} messages");
+    ci18n_set_current("en");
+
+    ci18n_format_plural(out, sizeof(out), "inbox", 1, "name", "Ilya", NULL);
+    ASSERT_STR_EQ(out, "Ilya has 1 message");
+
+    ci18n_format_plural(out, sizeof(out), "inbox", 7, "name", "Ilya", NULL);
+    ASSERT_STR_EQ(out, "Ilya has 7 messages");
+
+    /* An explicit pair wins over the rendered number, so a caller can write
+     * "many" or "99+" while still selecting the right form. */
+    ci18n_format_plural(out, sizeof(out), "inbox", 7,
+                        "name", "Ilya", "count", "lots of", NULL);
+    ASSERT_STR_EQ(out, "Ilya has lots of messages");
+
+    /* No such key at all. */
+    ASSERT(ci18n_format_plural(out, sizeof(out), "absent", 1, NULL) == 0);
+    ASSERT(out[0] == '\0');
+
+    ci18n_free();
+}
+
+/* ============================================================================
  * Locale detection
  * ============================================================================ */
 
@@ -1768,6 +1970,14 @@ int main(void)
     RUN_TEST(test_plural_lookup_russian);
     RUN_TEST(test_plural_falls_back_through_other_then_plain);
     RUN_TEST(test_plural_guards);
+
+    RUN_TEST(test_format_substitutes_by_name);
+    RUN_TEST(test_format_order_is_the_translations_business);
+    RUN_TEST(test_format_repeated_unused_and_missing);
+    RUN_TEST(test_format_braces_and_malformed_placeholders);
+    RUN_TEST(test_format_truncation_and_measuring);
+    RUN_TEST(test_format_plural_provides_count);
+    RUN_TEST(test_format_plural_mixes_pairs_and_overrides_count);
 
     RUN_TEST(test_set_current_best_walks_the_chain);
     RUN_TEST(test_set_current_best_leaves_current_alone_on_failure);

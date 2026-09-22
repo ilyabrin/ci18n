@@ -1,0 +1,3 @@
+files[one]={count} file
+files[other]={count} files
+files[few]={count}

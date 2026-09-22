@@ -214,6 +214,61 @@ Arabic, Lithuanian, Latvian, Slovenian, Irish, Romanian, and languages with
 no plural distinction such as Japanese, Chinese and Korean. An unknown
 language is treated as English-like. Only integer counts are considered.
 
+### Interpolation
+
+Values go into translations by name, not by position, because the order they
+appear in is the translation's business:
+
+```ini
+# en
+greeting=Hello, {name}! You have {count} messages.
+
+# ru
+greeting=Привет, {name}! У вас {count} сообщений.
+```
+
+```c
+char text[256];
+ci18n_format(text, sizeof(text), "greeting", "name", user, "count", "3", NULL);
+```
+
+Together with plurals, which is where it earns its keep:
+
+```ini
+inbox[one]={name}, у вас {count} новое сообщение
+inbox[few]={name}, у вас {count} новых сообщения
+inbox[many]={name}, у вас {count} новых сообщений
+```
+
+```c
+ci18n_format_plural(text, sizeof(text), "inbox", n, "name", user, NULL);
+```
+
+```
+Илья, у вас 1 новое сообщение
+Илья, у вас 3 новых сообщения
+Илья, у вас 5 новых сообщений
+```
+
+`{count}` is filled from the count itself, so it needs no pair. Pass one
+anyway to override it, which is how you render "99+" while still selecting
+the right form.
+
+Both functions follow `snprintf()`: at most `capacity - 1` bytes are written,
+the result is always terminated, and the return value is the length the whole
+result would have had, so a return of `capacity` or more means truncation.
+`ci18n_format(NULL, 0, ...)` measures without writing.
+
+Two deliberate choices worth knowing:
+
+- **Values are strings, never a format string.** A translation file is data,
+  often written by someone who is not the programmer. Passing it to
+  `printf()` as a format would make every translator a potential attacker.
+- **An unmatched placeholder stays as written.** `{nmae}` comes out as
+  `{nmae}`, so a typo is visible rather than a silent hole.
+
+Write `{{` and `}}` for literal braces.
+
 ### Locale detection
 
 ```c
@@ -273,8 +328,8 @@ it if you need to hold on to it.
 ### Version check
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 1, 0)
-#error "ci18n 2.1.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 2, 0)
+#error "ci18n 2.2.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -305,6 +360,8 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_plural_or_key(key, n)`            | Plural form, or the key |
 | `ci18n_plural_category(lang, n)`         | CLDR category for a count |
 | `ci18n_plural_category_name(cat)`        | Category as text      |
+| `ci18n_format(out, cap, key, ...)`       | Fill named placeholders |
+| `ci18n_format_plural(out, cap, key, n, ...)` | Plural form, filled |
 | `ci18n_detect_locale(out, cap)`          | Locale from the system |
 | `ci18n_set_current_best(locale)`         | Best match for a locale |
 
@@ -326,7 +383,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.1.0)
+  GIT_TAG v2.2.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

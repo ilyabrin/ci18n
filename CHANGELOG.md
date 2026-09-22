@@ -8,10 +8,52 @@ Because this is a single-header library, upgrading means replacing one file.
 Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 1, 0)
-#error "ci18n 2.1.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 2, 0)
+#error "ci18n 2.2.0 or newer is required"
 #endif
 ```
+
+## 2.2.0 - 2026-09-22
+
+Named interpolation. Additive, as before.
+
+### Added
+
+- `ci18n_format()` fills named placeholders from name and value pairs:
+
+  ```ini
+  greeting=Hello, {name}! You have {count} messages.
+  greeting=Привет, {name}! У вас {count} сообщений.
+  ```
+
+  ```c
+  char text[256];
+  ci18n_format(text, sizeof(text), "greeting", "name", user, "count", "3", NULL);
+  ```
+
+  Names rather than positions, because the order values appear in differs
+  between languages and that is exactly what positional formatting cannot
+  express. Write `{{` and `}}` for literal braces.
+
+- `ci18n_format_plural()` selects the plural form for a count and fills the
+  placeholders in one call, with the count available as `{count}` without
+  being passed as a pair. An explicit pair of that name still wins, so a
+  caller can render "99+" while still selecting the right form.
+
+### Notes
+
+- Both follow `snprintf()`: at most `capacity - 1` bytes are written, the
+  result is always terminated, and the return value is the length the whole
+  result would have had. `ci18n_format(NULL, 0, ...)` measures without
+  writing.
+- Values are strings, never a format string. A translation file is data,
+  often not written by the programmer, and handing it to `printf()` as a
+  format makes every translator a potential attacker.
+- A placeholder with no matching name is left exactly as written, so a typo
+  in a translation is visible in the output rather than a silent hole.
+- The formatter is now part of the fuzz target, since it parses translation
+  text that came from a file. Three brace-heavy seeds were added to the
+  corpus.
 
 ## 2.1.0 - 2026-09-22
 

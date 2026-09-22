@@ -101,6 +101,33 @@ int main(void) {
         }
     }
 
+    /* Interpolation. Placeholders are named, so each translation decides
+     * where the values go, and ci18n_format_plural() fills {count} itself. */
+    printf("\n=== Interpolation ===\n");
+    {
+        char text[256];
+
+        ci18n_set("en", "inbox[one]", "{name}, you have {count} new message");
+        ci18n_set("en", "inbox[other]", "{name}, you have {count} new messages");
+        ci18n_set("ru", "inbox[one]", "{name}, у вас {count} новое сообщение");
+        ci18n_set("ru", "inbox[few]", "{name}, у вас {count} новых сообщения");
+        ci18n_set("ru", "inbox[many]", "{name}, у вас {count} новых сообщений");
+
+        ci18n_set_current("en");
+        ci18n_format_plural(text, sizeof(text), "inbox", 1, "name", "Ilya", NULL);
+        printf("  %s\n", text);
+        ci18n_format_plural(text, sizeof(text), "inbox", 5, "name", "Ilya", NULL);
+        printf("  %s\n", text);
+
+        ci18n_set_current("ru");
+        ci18n_format_plural(text, sizeof(text), "inbox", 1, "name", "Илья", NULL);
+        printf("  %s\n", text);
+        ci18n_format_plural(text, sizeof(text), "inbox", 3, "name", "Илья", NULL);
+        printf("  %s\n", text);
+        ci18n_format_plural(text, sizeof(text), "inbox", 5, "name", "Илья", NULL);
+        printf("  %s\n", text);
+    }
+
     /* Locale detection. Loading plain "ru" is enough to honour a user whose
      * environment says ru-RU, because the chain drops subtags as it goes. */
     printf("\n=== Locale ===\n");

@@ -96,6 +96,48 @@ static void fuzz_one(const uint8_t *data, size_t size)
         ci18n_count(codes[i]);
     }
 
+    /* The formatter parses the stored values, which came from this input, so
+     * it sees arbitrary bytes too. Braces, half-written placeholders and
+     * names that match nothing all arrive here rather than in a test. */
+    {
+        char rendered[512];
+        const char *names[3];
+        size_t k;
+
+        names[0] = "name";
+        names[1] = "count";
+        names[2] = size > 0 ? (const char *)data : "x";
+
+        for (k = 0; k < sizeof(names) / sizeof(names[0]); k++)
+        {
+            char key[CI18N_MAX_KEY_LENGTH];
+            size_t len = size < sizeof(key) - 1 ? size : sizeof(key) - 1;
+            size_t needed;
+
+            memcpy(key, data, len);
+            key[len] = '\0';
+
+            needed = ci18n_format(rendered, sizeof(rendered), key,
+                                  names[k], "value", NULL);
+
+            /* Truncation is allowed; writing past the buffer is not, and the
+             * result has to be terminated whatever happened. */
+            if (needed > 0 && strlen(rendered) >= sizeof(rendered))
+            {
+                abort();
+            }
+
+            /* Measuring must agree with what a real write reports. */
+            if (ci18n_format(NULL, 0, key, names[k], "value", NULL) != needed)
+            {
+                abort();
+            }
+
+            ci18n_format_plural(rendered, sizeof(rendered), key,
+                                (long)size, names[k], "value", NULL);
+        }
+    }
+
     /* A second load into the same language exercises the merge path, where
      * the entry array is reallocated under pointers taken earlier. */
     ci18n_load_from_buffer("fz", (const char *)data, size);

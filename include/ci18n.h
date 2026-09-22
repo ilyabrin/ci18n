@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.1.0
+ * ci18n.h - v2.2.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -11,6 +11,7 @@
  *   - Packed storage: an entry costs 16 bytes, not 4352
  *   - CLDR plural rules, so Russian and Arabic work, not just English
  *   - Locale detection with a fallback chain: ru-RU to ru
+ *   - Named interpolation, so translations decide where values go
  *
  * USAGE:
  *   #define CI18N_IMPLEMENTATION before including this header in ONE source file
@@ -50,9 +51,9 @@
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 1
+#define CI18N_VERSION_MINOR 2
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.1.0"
+#define CI18N_VERSION_STRING "2.2.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -493,6 +494,71 @@ extern "C"
     CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count);
 
     /* ============================================================================
+     * Interpolation
+     * ============================================================================
+     *
+     * Translations need values dropped into them, and the order those values
+     * appear in differs between languages, which is exactly what positional
+     * formatting cannot express. So placeholders are named:
+     *
+     *   greeting=Hello, {name}! You have {count} messages.
+     *   greeting=Привет, {name}! У вас {count} сообщений.
+     *
+     *   char text[256];
+     *   ci18n_format(text, sizeof(text), "greeting",
+     *                "name", "Ilya", "count", "3", NULL);
+     *
+     * A translator can move {name} and {count} around freely, or use one
+     * twice, or leave one out. Write {{ and }} for literal braces.
+     *
+     * Values are strings, not a format string: a translation file is data,
+     * often not written by you, and handing it to printf() as a format makes
+     * every translator a potential attacker. Convert numbers yourself, or use
+     * ci18n_format_plural() which does it for the count.
+     * ============================================================================ */
+
+    /*
+     * Fill a translation's placeholders from name and value pairs.
+     *
+     * Arguments after `key` are `const char *` pairs, terminated by NULL:
+     *
+     *   ci18n_format(out, sizeof(out), "greeting", "name", user, NULL);
+     *
+     * Follows snprintf(): at most capacity-1 bytes are written, the result is
+     * always terminated when capacity is non-zero, and the return value is
+     * the length the whole result would have had. A return of capacity or
+     * more means it was truncated. Passing out = NULL with capacity = 0
+     * measures without writing, which is how you size a buffer.
+     *
+     * A placeholder with no matching name is left exactly as it appears, so a
+     * typo in a translation shows up in the output instead of vanishing.
+     *
+     * Returns: the full length of the result, not counting the terminator,
+     * or 0 if the key was not found
+     */
+    CI18N_DEF size_t ci18n_format(char *out, size_t capacity, const char *key, ...);
+
+    /*
+     * Pick the plural form for `count`, then fill its placeholders.
+     *
+     * The count is available as {count} without being passed as a pair,
+     * since a plural sentence almost always mentions the number it is about:
+     *
+     *   files[one]={count} файл
+     *   files[few]={count} файла
+     *   files[many]={count} файлов
+     *
+     *   ci18n_format_plural(out, sizeof(out), "files", n, NULL);
+     *
+     * Any other placeholders come from name and value pairs as usual, and a
+     * pair named "count" overrides the number.
+     *
+     * Returns: as ci18n_format()
+     */
+    CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key,
+                                         long count, ...);
+
+    /* ============================================================================
      * Locale detection
      * ============================================================================ */
 
@@ -616,6 +682,7 @@ extern "C"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 
 /* Only for GetUserDefaultLocaleName(). Define CI18N_NO_PLATFORM_LOCALE to
  * keep this out of your build and rely on the environment variables alone. */
@@ -1726,6 +1793,265 @@ CI18N_DEF size_t ci18n_count(const char *language_code)
 /* ============================================================================
  * Plurals
  * ============================================================================ */
+/* ============================================================================
+ * Interpolation
+ * ============================================================================ */
+
+/*
+ * Writes into the caller's buffer while counting what the whole result would
+ * need, so one pass can both fill a buffer and report a too-small one.
+ */
+typedef struct ci18n_sink
+{
+    char *out;
+    size_t capacity;
+    size_t written; /* bytes actually placed, never past capacity - 1 */
+    size_t needed;  /* bytes the full result would take */
+} ci18n_sink_t;
+
+static void ci18n_sink_put(ci18n_sink_t *sink, const char *text, size_t len)
+{
+    sink->needed += len;
+
+    if (sink->capacity == 0)
+    {
+        return;
+    }
+
+    if (sink->written + len > sink->capacity - 1)
+    {
+        len = sink->capacity - 1 - sink->written;
+    }
+
+    if (len > 0)
+    {
+        memcpy(sink->out + sink->written, text, len);
+        sink->written += len;
+    }
+}
+
+/*
+ * Find a placeholder's value among the name and value pairs.
+ *
+ * The list is walked from the start for every placeholder, on a copy, since a
+ * va_list cannot be rewound. Translations hold a handful of placeholders and
+ * callers pass a handful of pairs, so the cost is not worth an index.
+ */
+static const char *ci18n_lookup_argument(va_list args, const char *name, size_t name_len)
+{
+    va_list copy;
+    const char *found = NULL;
+
+    va_copy(copy, args);
+
+    for (;;)
+    {
+        const char *arg_name = va_arg(copy, const char *);
+        const char *arg_value;
+
+        if (!arg_name)
+        {
+            break;
+        }
+
+        arg_value = va_arg(copy, const char *);
+
+        if (strlen(arg_name) == name_len && strncmp(arg_name, name, name_len) == 0)
+        {
+            found = arg_value ? arg_value : "";
+            break;
+        }
+    }
+
+    va_end(copy);
+    return found;
+}
+
+/*
+ * Expand {placeholders} in `text`.
+ *
+ * `count_text` is the pre-rendered number for {count}, or NULL when there is
+ * no count. An explicit pair of the same name still wins, so a caller can
+ * override it.
+ */
+static size_t ci18n_expand(char *out, size_t capacity, const char *text,
+                           va_list args, const char *count_text)
+{
+    ci18n_sink_t sink;
+    size_t i = 0;
+
+    sink.out = out;
+    sink.capacity = capacity;
+    sink.written = 0;
+    sink.needed = 0;
+
+    while (text[i] != '\0')
+    {
+        size_t start;
+        size_t name_len;
+        const char *value;
+
+        if (text[i] != '{')
+        {
+            /* Literal run. Copied in one go rather than byte by byte. */
+            start = i;
+            while (text[i] != '\0' && text[i] != '{' && text[i] != '}')
+            {
+                i++;
+            }
+
+            if (i > start)
+            {
+                ci18n_sink_put(&sink, text + start, i - start);
+                continue;
+            }
+
+            /* A lone '}' is literal; '}}' is an escaped one. */
+            ci18n_sink_put(&sink, "}", 1);
+            i += (text[i + 1] == '}') ? 2 : 1;
+            continue;
+        }
+
+        /* '{{' is an escaped brace. */
+        if (text[i + 1] == '{')
+        {
+            ci18n_sink_put(&sink, "{", 1);
+            i += 2;
+            continue;
+        }
+
+        start = i + 1;
+        name_len = 0;
+        while (text[start + name_len] != '\0' && text[start + name_len] != '}')
+        {
+            name_len++;
+        }
+
+        /* Unterminated: the rest of the string is literal, not a placeholder. */
+        if (text[start + name_len] != '}')
+        {
+            ci18n_sink_put(&sink, text + i, strlen(text + i));
+            break;
+        }
+
+        value = ci18n_lookup_argument(args, text + start, name_len);
+
+        if (!value && count_text &&
+            name_len == 5 && strncmp(text + start, "count", 5) == 0)
+        {
+            value = count_text;
+        }
+
+        if (value)
+        {
+            ci18n_sink_put(&sink, value, strlen(value));
+        }
+        else
+        {
+            /* No such name: leave the placeholder visible, so a typo in a
+             * translation is something you can see rather than a hole. */
+            ci18n_sink_put(&sink, text + i, name_len + 2);
+        }
+
+        i = start + name_len + 1;
+    }
+
+    if (capacity > 0)
+    {
+        sink.out[sink.written] = '\0';
+    }
+
+    return sink.needed;
+}
+
+/* Render a count without pulling in snprintf's format machinery. */
+static void ci18n_render_long(char *out, size_t capacity, long value)
+{
+    char digits[24];
+    size_t n = 0;
+    size_t i = 0;
+    unsigned long magnitude;
+
+    if (capacity == 0)
+    {
+        return;
+    }
+
+    magnitude = (unsigned long)(value < 0 ? -value : value);
+
+    do
+    {
+        digits[n++] = (char)('0' + (magnitude % 10));
+        magnitude /= 10;
+    } while (magnitude > 0 && n < sizeof(digits));
+
+    if (value < 0 && i + 1 < capacity)
+    {
+        out[i++] = '-';
+    }
+
+    while (n > 0 && i + 1 < capacity)
+    {
+        out[i++] = digits[--n];
+    }
+
+    out[i] = '\0';
+}
+
+CI18N_DEF size_t ci18n_format(char *out, size_t capacity, const char *key, ...)
+{
+    va_list args;
+    const char *text;
+    size_t needed;
+
+    if (capacity > 0 && out)
+    {
+        out[0] = '\0';
+    }
+
+    text = ci18n_get(key);
+    if (!text)
+    {
+        return 0;
+    }
+
+    va_start(args, key);
+    needed = ci18n_expand(out, out ? capacity : 0, text, args, NULL);
+    va_end(args);
+
+    ci18n_succeed();
+    return needed;
+}
+
+CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key,
+                                     long count, ...)
+{
+    va_list args;
+    const char *text;
+    char count_text[24];
+    size_t needed;
+
+    if (capacity > 0 && out)
+    {
+        out[0] = '\0';
+    }
+
+    text = ci18n_plural(key, count);
+    if (!text)
+    {
+        return 0;
+    }
+
+    ci18n_render_long(count_text, sizeof(count_text), count);
+
+    va_start(args, count);
+    needed = ci18n_expand(out, out ? capacity : 0, text, args, count_text);
+    va_end(args);
+
+    ci18n_succeed();
+    return needed;
+}
+
 
 /*
  * CLDR groups languages by the plural rule they follow, so the rules live

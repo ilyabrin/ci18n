@@ -1,0 +1,2 @@
+greeting={name} has {count} items
+braces={{literal}} and {x}

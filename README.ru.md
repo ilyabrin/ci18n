@@ -217,6 +217,60 @@ ru:   1 файл    2 файла    5 файлов   11 файлов   21 фай
 различения числа, таких как японский, китайский и корейский. Неизвестный
 язык считается языком английского типа. Учитываются только целые числа.
 
+### Интерполяция
+
+Значения подставляются по имени, а не по позиции, потому что порядок,
+в котором они идут, это дело перевода:
+
+```ini
+# en
+greeting=Hello, {name}! You have {count} messages.
+
+# ru
+greeting=Привет, {name}! У вас {count} сообщений.
+```
+
+```c
+char text[256];
+ci18n_format(text, sizeof(text), "greeting", "name", user, "count", "3", NULL);
+```
+
+Вместе с плюрализацией, где это и окупается:
+
+```ini
+inbox[one]={name}, у вас {count} новое сообщение
+inbox[few]={name}, у вас {count} новых сообщения
+inbox[many]={name}, у вас {count} новых сообщений
+```
+
+```c
+ci18n_format_plural(text, sizeof(text), "inbox", n, "name", user, NULL);
+```
+
+```
+Илья, у вас 1 новое сообщение
+Илья, у вас 3 новых сообщения
+Илья, у вас 5 новых сообщений
+```
+
+`{count}` заполняется из самого числа, пару передавать не нужно. Передайте
+её явно, чтобы переопределить: так пишут «99+», не теряя правильной формы.
+
+Обе функции ведут себя как `snprintf()`: пишется не больше `capacity - 1` байт,
+результат всегда терминирован, а возвращается длина, которая потребовалась бы
+целиком. Значение от `capacity` и выше означает обрезание.
+`ci18n_format(NULL, 0, ...)` измеряет, ничего не записывая.
+
+Два решения, про которые стоит знать:
+
+- **Значения это строки, а не формат.** Файл перевода это данные, часто
+  написанные не программистом. Передавать их в `printf()` как формат значит
+  сделать каждого переводчика потенциальным атакующим.
+- **Несовпавший плейсхолдер остаётся как есть.** `{nmae}` так и выведется,
+  то есть опечатка видна, а не превращается в молчаливую дыру.
+
+Для литеральных скобок пишите `{{` и `}}`.
+
 ### Определение локали
 
 ```c
@@ -277,8 +331,8 @@ puts(greeting);                           /* висячий указатель *
 ### Проверка версии
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 1, 0)
-#error "ci18n 2.1.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 2, 0)
+#error "ci18n 2.2.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -309,6 +363,8 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_plural_or_key(key, n)`            | Форма плюрала или ключ |
 | `ci18n_plural_category(lang, n)`         | Категория CLDR для числа |
 | `ci18n_plural_category_name(cat)`        | Категория текстом   |
+| `ci18n_format(out, cap, key, ...)`       | Подстановка по именам |
+| `ci18n_format_plural(out, cap, key, n, ...)` | Форма плюрала с подстановкой |
 | `ci18n_detect_locale(out, cap)`          | Локаль из системы   |
 | `ci18n_set_current_best(locale)`         | Лучшее совпадение локали |
 
@@ -330,7 +386,7 @@ single-header библиотеки и существуют, и это вполн
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.1.0)
+  GIT_TAG v2.2.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)
