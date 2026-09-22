@@ -1,11 +1,13 @@
 /*
- * ci18n.h - v2.5.0
+ * ci18n.h - v2.6.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
  *   - Simple translation key-value storage
  *   - Multiple language support
  *   - UTF-8 string handling, BOM tolerant
+ *   - Explicit catalogues, so a library can use it without stealing
+ *     the application's language
  *   - Three threading modes, including a shared context behind an rwlock
  *   - No external dependencies, C99 and newer
  *   - Packed storage: an entry costs 16 bytes, not 4352
@@ -53,9 +55,9 @@ Second line.
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 5
+#define CI18N_VERSION_MINOR 6
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.5.0"
+#define CI18N_VERSION_STRING "2.6.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -721,6 +723,84 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
      * Returns: true if a language was selected, false if none matched
      */
     CI18N_DEF bool ci18n_set_current_best(const char *locale);
+
+    /* ============================================================================
+     * Catalogues
+     * ============================================================================
+     *
+     * Everything above works on one catalogue the library owns. That is
+     * convenient for a program, and wrong for a library: if ci18n is used
+     * inside a reusable component, the component and the application that
+     * linked it share one current language, and whichever called
+     * ci18n_set_current() last wins.
+     *
+     * So every function that touches a catalogue has an _in variant taking
+     * one explicitly, and the plain names are those variants applied to the
+     * default catalogue. Nothing else differs.
+     *
+     *   ci18n_t *ui = ci18n_create();
+     *   ci18n_load_language_in(ui, "en", "en.txt");
+     *   ci18n_set_current_in(ui, "en");
+     *   puts(ci18n_get_or_key_in(ui, "greeting"));
+     *   ci18n_destroy(ui);
+     *
+     * A catalogue carries its own languages, its own current and fallback
+     * selection, and in the shared threading mode its own lock, so two of
+     * them never wait on each other.
+     * ============================================================================ */
+
+    /*
+     * Create a catalogue, ready to load into.
+     *
+     * Returns: a catalogue, or NULL if it could not be allocated
+     */
+    CI18N_DEF ci18n_t *ci18n_create(void);
+
+    /*
+     * Free a catalogue and everything it holds.
+     *
+     * Passing NULL is a no-op, so this can be called on a failed create.
+     * Never pass the default catalogue: it is not one of these.
+     */
+    CI18N_DEF void ci18n_destroy(ci18n_t *catalog);
+
+    /*
+     * The default catalogue, the one the plain functions use. Handy for code
+     * written against the _in functions that wants to keep using it.
+     *
+     * Returns: the default catalogue, never NULL
+     */
+    CI18N_DEF ci18n_t *ci18n_default(void);
+
+    /* The _in variants. Each behaves exactly as the function it is named
+     * after, on the catalogue given rather than on the default one. */
+    CI18N_DEF bool ci18n_load_language_in(ci18n_t *catalog, const char *language_code, const char *filepath);
+    CI18N_DEF bool ci18n_load_from_buffer_in(ci18n_t *catalog, const char *language_code, const char *buffer, size_t length);
+    CI18N_DEF bool ci18n_set_current_in(ci18n_t *catalog, const char *language_code);
+    CI18N_DEF bool ci18n_set_fallback_in(ci18n_t *catalog, const char *language_code);
+    CI18N_DEF bool ci18n_set_current_best_in(ci18n_t *catalog, const char *locale);
+    CI18N_DEF bool ci18n_set_in(ci18n_t *catalog, const char *language_code, const char *key, const char *value);
+    CI18N_DEF bool ci18n_remove_in(ci18n_t *catalog, const char *language_code, const char *key);
+    CI18N_DEF bool ci18n_clear_in(ci18n_t *catalog, const char *language_code);
+    CI18N_DEF bool ci18n_remove_language_in(ci18n_t *catalog, const char *language_code);
+    CI18N_DEF const char *ci18n_get_in(ci18n_t *catalog, const char *key);
+    CI18N_DEF const char *ci18n_get_or_key_in(ci18n_t *catalog, const char *key);
+    CI18N_DEF bool ci18n_has_in(ci18n_t *catalog, const char *key);
+    CI18N_DEF const char *ci18n_get_current_in(ci18n_t *catalog);
+    CI18N_DEF size_t ci18n_get_languages_in(ci18n_t *catalog, const char **out, size_t capacity);
+    CI18N_DEF size_t ci18n_count_in(ci18n_t *catalog, const char *language_code);
+    CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long count);
+    CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count);
+
+    /* Diagnostics for a specific catalogue. In the shared threading mode the
+     * plain versions are per-thread, which is what a caller wants; these
+     * report what the catalogue itself last recorded. */
+    CI18N_DEF ci18n_error_t ci18n_last_error_in(ci18n_t *catalog);
+    CI18N_DEF const ci18n_load_stats_t *ci18n_last_load_stats_in(ci18n_t *catalog);
+
+    /* As ci18n_get_copy(), on the catalogue given. */
+    CI18N_DEF size_t ci18n_get_copy_in(ci18n_t *catalog, const char *key,
+                                       char *out, size_t capacity);
 
     /* ============================================================================
      * Diagnostics
@@ -3337,6 +3417,297 @@ static bool ci18n_is_initialized_impl(ci18n_t *ctx)
 {
     return ctx->initialized;
 }
+/* ============================================================================
+ * Catalogues
+ * ============================================================================ */
+
+CI18N_DEF ci18n_t *ci18n_create(void)
+{
+    ci18n_t *catalog = (ci18n_t *)calloc(1, sizeof(ci18n_t));
+
+    if (!catalog)
+    {
+        return NULL;
+    }
+
+#ifdef CI18N_THREAD_SHARED
+    /* The default catalogue gets a static initialiser; one made at runtime
+     * has to be initialised here. calloc leaves it zeroed, which happens to
+     * be right for SRWLOCK and is not something to rely on for pthreads. */
+#if defined(_WIN32)
+    InitializeSRWLock(&catalog->lock);
+#else
+    if (pthread_rwlock_init(&catalog->lock, NULL) != 0)
+    {
+        free(catalog);
+        return NULL;
+    }
+#endif
+#endif
+
+    catalog->initialized = true;
+    return catalog;
+}
+
+CI18N_DEF void ci18n_destroy(ci18n_t *catalog)
+{
+    size_t i;
+
+    if (!catalog)
+    {
+        return;
+    }
+
+    for (i = 0; i < catalog->language_count; i++)
+    {
+        ci18n_lang_release(&catalog->languages[i]);
+    }
+
+#ifdef CI18N_THREAD_SHARED
+#if !defined(_WIN32)
+    pthread_rwlock_destroy(&catalog->lock);
+#endif
+#endif
+
+    free(catalog);
+}
+
+CI18N_DEF ci18n_t *ci18n_default(void)
+{
+    return &ci18n_ctx;
+}
+
+CI18N_DEF bool ci18n_load_language_in(ci18n_t *catalog, const char *language_code, const char *filepath)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_load_language_impl(catalog, language_code, filepath);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_load_from_buffer_in(ci18n_t *catalog, const char *language_code, const char *buffer, size_t length)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_load_from_buffer_impl(catalog, language_code, buffer, length);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_set_current_in(ci18n_t *catalog, const char *language_code)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_set_current_impl(catalog, language_code);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_set_fallback_in(ci18n_t *catalog, const char *language_code)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_set_fallback_impl(catalog, language_code);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_set_current_best_in(ci18n_t *catalog, const char *locale)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_set_current_best_impl(catalog, locale);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_set_in(ci18n_t *catalog, const char *language_code, const char *key, const char *value)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_set_impl(catalog, language_code, key, value);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_remove_in(ci18n_t *catalog, const char *language_code, const char *key)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_remove_impl(catalog, language_code, key);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_clear_in(ci18n_t *catalog, const char *language_code)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_clear_impl(catalog, language_code);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_remove_language_in(ci18n_t *catalog, const char *language_code)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_remove_language_impl(catalog, language_code);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF const char *ci18n_get_in(ci18n_t *catalog, const char *key)
+{
+    const char *result;
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_get_impl(catalog, key);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF const char *ci18n_get_or_key_in(ci18n_t *catalog, const char *key)
+{
+    const char *result;
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_get_or_key_impl(catalog, key);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_has_in(ci18n_t *catalog, const char *key)
+{
+    bool result;
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_has_impl(catalog, key);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF const char *ci18n_get_current_in(ci18n_t *catalog)
+{
+    const char *result;
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_get_current_impl(catalog);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF size_t ci18n_get_languages_in(ci18n_t *catalog, const char **out, size_t capacity)
+{
+    size_t result;
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_get_languages_impl(catalog, out, capacity);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF size_t ci18n_count_in(ci18n_t *catalog, const char *language_code)
+{
+    size_t result;
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_count_impl(catalog, language_code);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long count)
+{
+    const char *result;
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_plural_impl(catalog, key, count);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count)
+{
+    const char *result;
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_plural_or_key_impl(catalog, key, count);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF ci18n_error_t ci18n_last_error_in(ci18n_t *catalog)
+{
+    return catalog->last_error;
+}
+
+CI18N_DEF const ci18n_load_stats_t *ci18n_last_load_stats_in(ci18n_t *catalog)
+{
+    return &catalog->load_stats;
+}
+
+CI18N_DEF size_t ci18n_get_copy_in(ci18n_t *catalog, const char *key,
+                                   char *out, size_t capacity)
+{
+    const char *text;
+    size_t len;
+
+    if (out && capacity > 0)
+    {
+        out[0] = 0;
+    }
+
+    CI18N_READ_LOCK(catalog);
+
+    text = ci18n_get_impl(catalog, key);
+    if (!text)
+    {
+        CI18N_READ_UNLOCK(catalog);
+        return 0;
+    }
+
+    len = strlen(text);
+
+    if (out && capacity > 0)
+    {
+        size_t fits = len < capacity - 1 ? len : capacity - 1;
+
+        memcpy(out, text, fits);
+        out[fits] = 0;
+    }
+
+    CI18N_READ_UNLOCK(catalog);
+    return len;
+}
+
 CI18N_DEF bool ci18n_is_initialized(void)
 {
     bool result;

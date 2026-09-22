@@ -349,6 +349,40 @@ ci18n_set_current_best("ru-RU");               /* или задать самом
 `CI18N_NO_PLATFORM_LOCALE` убирает `windows.h` из сборки, оставляя только
 переменные окружения.
 
+### Каталоги
+
+Всё выше работает с одним каталогом, которым владеет библиотека. Для
+программы это удобно, для библиотеки неприемлемо: если ci18n используется
+внутри переиспользуемого компонента, компонент и приложение делят один
+текущий язык, и побеждает тот, кто позже вызвал `ci18n_set_current()`.
+
+Поэтому у каждой функции есть вариант `_in`, принимающий каталог явно, а
+привычные имена это те же варианты, применённые к каталогу по умолчанию:
+
+```c
+ci18n_t *ui   = ci18n_create();
+ci18n_t *logs = ci18n_create();
+
+ci18n_load_language_in(ui, "ru", "ru.txt");
+ci18n_set_current_in(ui, "ru");
+
+ci18n_load_language_in(logs, "en", "en.txt");
+ci18n_set_current_in(logs, "en");
+
+puts(ci18n_get_or_key_in(ui, "greeting"));     /* по-русски */
+puts(ci18n_get_or_key_in(logs, "greeting"));   /* по-английски */
+
+ci18n_destroy(ui);
+ci18n_destroy(logs);
+```
+
+Каталог несёт свои языки, свой текущий и fallback язык, а в общем потоковом
+режиме ещё и свою блокировку, так что два каталога никогда не ждут друг
+друга. `ci18n_default()` возвращает тот, с которым работают привычные функции.
+
+`ci18n_destroy(NULL)` ничего не делает, поэтому неудавшийся create не требует
+отдельной ветки.
+
 ### Потоки
 
 Три режима. Выберите один до включения заголовка, два сразу это ошибка.
@@ -418,8 +452,8 @@ puts(greeting);                           /* висячий указатель *
 ### Проверка версии
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 5, 0)
-#error "ci18n 2.5.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 6, 0)
+#error "ci18n 2.6.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -429,6 +463,9 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 
 | Функция                                  | Описание                 |
 | ---------------------------------------- | ------------------------ |
+| `ci18n_create()` / `ci18n_destroy(c)`    | Создать или освободить каталог |
+| `ci18n_default()`                        | Каталог привычных имён |
+| `ci18n_*_in(catalog, ...)`               | Любая из ниже, на этом каталоге |
 | `ci18n_init()`                           | Инициализация системы    |
 | `ci18n_free()`                           | Освобождение ресурсов    |
 | `ci18n_load_language(code, path)`        | Загрузка из файла        |
@@ -475,7 +512,7 @@ single-header библиотеки и существуют, и это вполн
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.5.0)
+  GIT_TAG v2.6.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

@@ -345,6 +345,40 @@ language is left as it was.
 Define `CI18N_NO_PLATFORM_LOCALE` to keep `windows.h` out of your build and
 rely on the environment variables alone.
 
+### Catalogues
+
+Everything above works on one catalogue the library owns. Convenient for a
+program, wrong for a library: if ci18n is used inside a reusable component,
+the component and the application that linked it share one current language,
+and whichever called `ci18n_set_current()` last wins.
+
+So every function has an `_in` variant taking a catalogue explicitly, and the
+plain names are those variants applied to a default one:
+
+```c
+ci18n_t *ui   = ci18n_create();
+ci18n_t *logs = ci18n_create();
+
+ci18n_load_language_in(ui, "ru", "ru.txt");
+ci18n_set_current_in(ui, "ru");
+
+ci18n_load_language_in(logs, "en", "en.txt");
+ci18n_set_current_in(logs, "en");
+
+puts(ci18n_get_or_key_in(ui, "greeting"));     /* Russian */
+puts(ci18n_get_or_key_in(logs, "greeting"));   /* English */
+
+ci18n_destroy(ui);
+ci18n_destroy(logs);
+```
+
+A catalogue carries its own languages, its own current and fallback selection,
+and in the shared threading mode its own lock, so two of them never wait on
+each other. `ci18n_default()` returns the one the plain functions use, so code
+written against the `_in` functions can still reach it.
+
+`ci18n_destroy(NULL)` is a no-op, so a failed create needs no special case.
+
 ### Threads
 
 Three modes. Pick one before including the header; defining two is an error.
@@ -414,8 +448,8 @@ it if you need to hold on to it.
 ### Version check
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 5, 0)
-#error "ci18n 2.5.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 6, 0)
+#error "ci18n 2.6.0 or newer is required"
 #endif
 
 printf("ci18n %s\n", CI18N_VERSION_STRING);
@@ -425,6 +459,9 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 
 | Function                                 | Description           |
 | ---------------------------------------- | --------------------- |
+| `ci18n_create()` / `ci18n_destroy(c)`    | Make or free a catalogue |
+| `ci18n_default()`                        | The catalogue the plain names use |
+| `ci18n_*_in(catalog, ...)`               | Any of the below, on that catalogue |
 | `ci18n_init()`                           | Initialize the system |
 | `ci18n_free()`                           | Free resources        |
 | `ci18n_load_language(code, path)`        | Load from file        |
@@ -471,7 +508,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.5.0)
+  GIT_TAG v2.6.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

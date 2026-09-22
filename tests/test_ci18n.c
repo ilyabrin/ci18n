@@ -1369,6 +1369,120 @@ TEST(test_remove_language_guards)
 }
 
 /* ============================================================================
+ * Catalogues
+ *
+ * The reason the handle exists: two independent sets of translations in one
+ * program, so a library using ci18n cannot steal the application's language.
+ * ============================================================================ */
+
+TEST(test_catalogues_are_independent)
+{
+    ci18n_t *ui = ci18n_create();
+    ci18n_t *logs = ci18n_create();
+
+    ASSERT(ui != NULL);
+    ASSERT(logs != NULL);
+
+    ASSERT(ci18n_set_in(ui, "en", "k", "ui english") == true);
+    ASSERT(ci18n_set_in(ui, "ru", "k", "ui russian") == true);
+    ASSERT(ci18n_set_in(logs, "en", "k", "log english") == true);
+
+    /* Separate selections. This is the whole point: a component switching its
+     * own language must not move anybody else's. */
+    ASSERT(ci18n_set_current_in(ui, "ru") == true);
+    ASSERT(ci18n_set_current_in(logs, "en") == true);
+
+    ASSERT_STR_EQ(ci18n_get_in(ui, "k"), "ui russian");
+    ASSERT_STR_EQ(ci18n_get_in(logs, "k"), "log english");
+
+    /* Separate language tables too. */
+    ASSERT(ci18n_get_languages_in(ui, NULL, 0) == 2);
+    ASSERT(ci18n_get_languages_in(logs, NULL, 0) == 1);
+    ASSERT(ci18n_count_in(logs, "ru") == 0);
+
+    /* And the default catalogue is a third, untouched by either. */
+    ci18n_init();
+    ASSERT(ci18n_get_languages(NULL, 0) == 0);
+    ASSERT(ci18n_get("k") == NULL);
+
+    ci18n_destroy(ui);
+    ci18n_destroy(logs);
+    ci18n_free();
+}
+
+TEST(test_catalogue_covers_the_whole_api)
+{
+    ci18n_t *cat = ci18n_create();
+    char buffer[64];
+    const char *codes[4];
+
+    ASSERT(cat != NULL);
+
+    /* Loading, plurals, interpolation and diagnostics all work on a
+     * catalogue, not only on the default one. */
+    ASSERT(ci18n_load_from_buffer_in(cat, "ru",
+                                     "files[one]={count} файл\n"
+                                     "files[few]={count} файла\n"
+                                     "files[many]={count} файлов\n"
+                                     "greeting=Привет\n",
+                                     strlen("files[one]={count} файл\n"
+                                            "files[few]={count} файла\n"
+                                            "files[many]={count} файлов\n"
+                                            "greeting=Привет\n")) == true);
+
+    ASSERT(ci18n_set_current_in(cat, "ru") == true);
+    ASSERT(ci18n_count_in(cat, "ru") == 4);
+    ASSERT(ci18n_has_in(cat, "greeting") == true);
+    ASSERT_STR_EQ(ci18n_get_current_in(cat), "ru");
+    ASSERT_STR_EQ(ci18n_get_or_key_in(cat, "absent"), "absent");
+
+    ASSERT(ci18n_get_copy_in(cat, "greeting", buffer, sizeof(buffer)) == 12);
+    ASSERT_STR_EQ(buffer, "Привет");
+
+    ASSERT_STR_EQ(ci18n_plural_in(cat, "files", 2), "{count} файла");
+    ASSERT_STR_EQ(ci18n_plural_or_key_in(cat, "files", 5), "{count} файлов");
+
+    ASSERT(ci18n_get_languages_in(cat, codes, 4) == 1);
+    ASSERT_STR_EQ(codes[0], "ru");
+
+    /* The catalogue's own error slot, which the shared mode keeps separate
+     * from the per-thread one. */
+    ASSERT(ci18n_get_in(cat, "absent") == NULL);
+    ASSERT(ci18n_last_error_in(cat) == CI18N_ERR_KEY_NOT_FOUND);
+    ASSERT(ci18n_last_load_stats_in(cat)->entries_loaded == 4);
+
+    ASSERT(ci18n_remove_in(cat, "ru", "greeting") == true);
+    ASSERT(ci18n_count_in(cat, "ru") == 3);
+    ASSERT(ci18n_clear_in(cat, "ru") == true);
+    ASSERT(ci18n_count_in(cat, "ru") == 0);
+    ASSERT(ci18n_remove_language_in(cat, "ru") == true);
+    ASSERT(ci18n_get_languages_in(cat, NULL, 0) == 0);
+
+    ci18n_destroy(cat);
+}
+
+TEST(test_default_catalogue_is_reachable)
+{
+    ci18n_init();
+    ci18n_set("en", "k", "through the plain api");
+    ci18n_set_current("en");
+
+    /* The plain functions are the _in functions on this catalogue, so both
+     * spellings have to see the same thing. */
+    ASSERT_STR_EQ(ci18n_get_in(ci18n_default(), "k"), "through the plain api");
+    ASSERT(ci18n_set_in(ci18n_default(), "en", "other", "v") == true);
+    ASSERT_STR_EQ(ci18n_get("other"), "v");
+
+    ci18n_free();
+}
+
+TEST(test_destroy_tolerates_null)
+{
+    /* So a failed create needs no special case at the call site. */
+    ci18n_destroy(NULL);
+}
+
+/* ============================================================================
  * Escape sequences
  *
  * Decoded by the parser only. ci18n_set() takes strings the C compiler has
@@ -2216,6 +2330,11 @@ int main(void)
     RUN_TEST(test_remove_language_frees_the_slot);
     RUN_TEST(test_remove_language_clears_the_selection);
     RUN_TEST(test_remove_language_guards);
+
+    RUN_TEST(test_catalogues_are_independent);
+    RUN_TEST(test_catalogue_covers_the_whole_api);
+    RUN_TEST(test_default_catalogue_is_reachable);
+    RUN_TEST(test_destroy_tolerates_null);
 
     RUN_TEST(test_escapes_in_values);
     RUN_TEST(test_escaped_separator_in_key);

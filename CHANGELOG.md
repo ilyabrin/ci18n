@@ -8,10 +8,69 @@ Because this is a single-header library, upgrading means replacing one file.
 Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ```c
-#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 5, 0)
-#error "ci18n 2.5.0 or newer is required"
+#if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 6, 0)
+#error "ci18n 2.6.0 or newer is required"
 #endif
 ```
+
+## 2.6.0 - 2026-09-22
+
+Explicit catalogues, so ci18n can be used inside a library.
+
+### Added
+
+- `ci18n_create()`, `ci18n_destroy()` and `ci18n_default()`, plus an `_in`
+  variant of every function that touches a catalogue. The plain names are
+  unchanged and are those variants applied to a default catalogue, so nothing
+  downstream needs editing.
+
+  ```c
+  ci18n_t *ui = ci18n_create();
+  ci18n_load_language_in(ui, "en", "en.txt");
+  ci18n_set_current_in(ui, "en");
+  puts(ci18n_get_or_key_in(ui, "greeting"));
+  ci18n_destroy(ui);
+  ```
+
+  The point is not convenience. Until now a library using ci18n internally
+  shared one current language with the application that linked it, and
+  whichever called `ci18n_set_current()` last won. That made ci18n unusable
+  inside any reusable component, and no amount of documentation could fix it.
+
+- A catalogue carries its own languages, its own current and fallback
+  selection, and in the shared threading mode its own lock, so two catalogues
+  never wait on each other.
+
+- `ci18n_last_error_in()` and `ci18n_last_load_stats_in()` report what a
+  catalogue itself recorded. The plain versions stay per-thread in the shared
+  mode, which is what a caller wants.
+
+- `make valgrind`, and a valgrind job in CI. It overlaps AddressSanitizer,
+  which already runs, but not exactly: valgrind sees uninitialised reads ASan
+  does not, and needs no instrumentation, so it checks the code an ordinary
+  build produces.
+
+### Changed
+
+- Internally every helper and every unlocked core now takes the catalogue it
+  operates on. That was a separate commit with no behaviour change, because a
+  mechanical refactor of that size is only safe if the tests are the judge.
+- The rwlock moved into the catalogue, which is where 2.5.0 said it was and
+  where per-catalogue locking requires it. Its type therefore moved to the
+  public section, so the shared mode pulls in `pthread.h`, or `windows.h` on
+  Windows, from there.
+
+### Fixed
+
+- `ci18n_init()` and `ci18n_free()` cleared the catalogue with a `memset` over
+  the whole struct, which named the global rather than the catalogue they were
+  given. Harmless with one catalogue, wrong the moment there are two. The same
+  `memset` also zeroed the lock, which deadlocked the shared tests as soon as
+  the lock became a field.
+- The glibc guard added in 2.5.0 never fired. It tested whether
+  `_POSIX_C_SOURCE` was defined, but `-pthread` makes glibc define it as
+  `199506L` while `pthread_rwlock_*` needs `200112L`. It now checks
+  `__USE_XOPEN2K`, glibc's own gate, and both suggested remedies are verified.
 
 ## 2.5.0 - 2026-09-22
 
