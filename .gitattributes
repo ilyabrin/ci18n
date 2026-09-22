@@ -1,0 +1,10 @@
+# Normalize line endings in sources and docs, the usual arrangement.
+* text=auto
+
+# Fuzz seeds are byte sequences, not text. Normalizing them destroys the
+# point: the CRLF seed came back from git as LF, which made it a duplicate of
+# the plain one, and a checkout on Windows would have given every other seed
+# CRLF it was never meant to have.
+#
+# The last matching line wins, so this has to come after the rule above.
+tests/fuzz_corpus/** -text -diff
