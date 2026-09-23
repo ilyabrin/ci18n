@@ -50,6 +50,10 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ## 2.8.0 - 2026-09-23
 
+Not released on its own. Its commit failed the MSVC build, and the fix
+arrived with 2.9.0 an hour later, so there is no v2.8.0 tag: everything
+below ships in 2.9.0.
+
 ### Added
 
 - UTF-8 helpers: `ci18n_utf8_valid()`, `ci18n_utf8_length()` for characters
