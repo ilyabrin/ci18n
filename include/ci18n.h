@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.14.0
+ * ci18n.h - v2.15.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -59,9 +59,9 @@ Second line.
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 14
+#define CI18N_VERSION_MINOR 15
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.14.0"
+#define CI18N_VERSION_STRING "2.15.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
