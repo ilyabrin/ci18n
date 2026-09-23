@@ -254,6 +254,16 @@ jobs:
               --specs=picolibc.specs --oslib=semihost -Iinclude \
               -o ui_rv32.elf examples/embedded_ui/ui.c
             riscv64-unknown-elf-size ui_rv32.elf | awk 'NR==2 {print "| rv32imc | " $1 " | " $2 " | " $3 " |"}'
+            # tests/minimal.c with everything in and with CI18N_MINIMAL,
+            # the figures the README quotes.
+            for flags in "" "-DCI18N_MINIMAL"; do
+              arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Os -std=c99 -Wall -Wextra -Werror $flags \
+                -ffunction-sections -fdata-sections -Wl,--gc-sections \
+                --specs=nano.specs --specs=nosys.specs -Iinclude \
+                -o min.elf tests/minimal.c 2>/dev/null
+              arm-none-eabi-size min.elf | awk -v f="${flags:-everything}" \
+                'NR==2 {print "| cortex-m4, tests/minimal.c, " f " | " $1 " | " $2 " | " $3 " |"}'
+            done
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
   android:

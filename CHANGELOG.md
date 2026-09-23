@@ -13,6 +13,25 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## Unreleased
+
+### Added
+
+- Modules that can be left out: `CI18N_NO_FORMAT`, `CI18N_NO_NUMBERS`,
+  `CI18N_NO_ORDINALS`, `CI18N_NO_LOCALE` and `CI18N_NO_FILES`, next to the
+  existing `CI18N_NO_MO`, and `CI18N_MINIMAL` for all of them. A minimal
+  build is about half the size: 14 KB instead of 27 KB at `-Os` on x86-64,
+  7 KB instead of 13 KB on a Cortex-M4. A left-out function is not
+  declared, so calling it fails at compile time. Nothing changes for a
+  build that defines none of them.
+
+### Documentation
+
+- The size figures were out of date: the library had grown to 38 KB at
+  `-O2` on x86-64, not the 25 to 28 KB the README still said, and the
+  header to 208 KB of source. Both READMEs now give measured numbers for
+  the full and the minimal build, and the cost of each module.
+
 ## 2.15.0 - 2026-09-23
 
 ### Added

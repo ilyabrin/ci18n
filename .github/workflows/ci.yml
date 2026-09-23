@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # ci/** so a change to CI can be tried without red runs on main.
+    branches: [main, master, "ci/**"]
   pull_request:
     branches: [main, master]
 
@@ -101,6 +102,38 @@ jobs:
 
       - name: Run example
         run: ./example
+
+  # Every module that can be left out, one at a time and all together. A
+  # function a module forgot to guard shows up here as an unused static or
+  # a missing symbol, and the tests that remain have to pass without it.
+  modules:
+    name: modules / ${{ matrix.config }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [CI18N_NO_FORMAT, CI18N_NO_NUMBERS, CI18N_NO_ORDINALS,
+                 CI18N_NO_LOCALE, CI18N_NO_MO, CI18N_NO_FILES, CI18N_MINIMAL]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc clang make
+
+      - name: Tests, gcc and clang
+        run: |
+          for cc in gcc clang; do
+            make clean
+            make CC=$cc test EXTRA_CFLAGS="-Werror -Wpedantic -D${{ matrix.config }}"
+          done
+
+      # The shared mode wraps every entry point, so it gets its own build.
+      - name: Shared mode compiles
+        run: |
+          printf '#define CI18N_IMPLEMENTATION\n#include "ci18n.h"\n' > impl.c
+          gcc -std=c99 -Wall -Wextra -Wpedantic -Werror -Iinclude -D${{ matrix.config }} \
+            -DCI18N_THREAD_SHARED -D_POSIX_C_SOURCE=200809L -c impl.c -o impl.o
 
   # Overlaps AddressSanitizer, which already runs, but not exactly: valgrind
   # catches uninitialised reads ASan does not, and it needs no

@@ -297,9 +297,39 @@ Define macros before including the header to configure:
 #define CI18N_MAX_KEYS_PER_LANGUAGE 1024
 #define CI18N_MAX_CODE_LENGTH 32
 #define CI18N_THREAD_LOCAL_CONTEXT  /* one context per thread */
-#define CI18N_NO_MO                 /* leave out the .mo loader, about 2.5 KB */
 #include "ci18n.h"
 ```
+
+### Leaving parts out
+
+Everything is in by default. Each of these takes a feature out, its code and
+its data, and stops declaring its functions, so a call to one is a compile
+error rather than a surprise at run time:
+
+| Macro | Removes | Saves at `-Os`, x86-64 / Cortex-M4 |
+| --- | --- | --- |
+| `CI18N_NO_FORMAT` | `ci18n_format` and relatives, formatters, bidi isolation | 4.9 / 1.8 KB, and 260 to 330 bytes per catalogue |
+| `CI18N_NO_MO` | the gettext `.mo` loader | 2.7 / 1.3 KB |
+| `CI18N_NO_ORDINALS` | `ci18n_ordinal` and relatives | 2.6 / 1.0 KB |
+| `CI18N_NO_NUMBERS` | `ci18n_format_number` and `{n:number}` | 2.2 / 1.4 KB |
+| `CI18N_NO_FILES` | every loader that opens a file | 1.2 / 0.4 KB |
+| `CI18N_NO_LOCALE` | `ci18n_detect_locale`, `ci18n_set_current_best` | 0.7 / 0.4 KB |
+| `CI18N_MINIMAL` | all of the above | 13 / 6.0 KB, about half |
+
+What stays in every build: loading from buffers, lookup, plurals, the
+fallback language, catalogues, text direction, the UTF-8 helpers and the
+diagnostics. CI builds and tests each of these on its own, and all together.
+
+**When this matters, and when the linker already does it.** The savings
+above are for the whole implementation, which is what you get from gcc and
+clang by default and from any shared library, since every public function is
+kept. With `-ffunction-sections -fdata-sections -Wl,--gc-sections`, the
+default in ESP-IDF, Zephyr, STM32Cube and the Arduino cores, the linker drops
+what you never call on its own. There [tests/minimal.c](tests/minimal.c), a
+lookup and a plural, takes 7.1 KB of library code on a Cortex-M4 with
+everything in and 6.2 KB with `CI18N_MINIMAL`, and the macros save what the
+linker cannot see through: the ordinal rules the plural lookup is wired to,
+and 260 bytes of RAM per catalogue for the formatter table.
 
 ### Linkage
 
@@ -960,15 +990,21 @@ run it.
 For reference, glibc's `gettext` on the same keys and machine takes 133 ns
 for a found key and 679 ns for a missing one (`make bench-gettext`).
 
-**Size.** The implementation adds 25 to 28 KB of code at `-O2` and 18 to
-19 KB at `-Os`, depending on the platform, plus under 2 KB of rule tables. The header itself is 160 KB of source, most of it
-comments, and is compiled in one file only.
+**Size.** Code and constant data of the implementation, measured with gcc:
+
+| Build | x86-64 `-O2` | x86-64 `-Os` | Cortex-M4 `-Os` |
+| --- | --- | --- | --- |
+| Everything | 38 KB | 27 KB | 13 KB |
+| `CI18N_MINIMAL` | 21 KB | 14 KB | 7 KB |
+
+See "Leaving parts out" for what each module costs. The header itself is
+208 KB of source, most of it comments, and is compiled in one file only.
 
 **Memory.**
 
 | What | Size |
 | --- | --- |
-| A catalogue, empty | 3.5 KB, no heap |
+| A catalogue, empty | 3.5 KB, no heap; 0.4 KB with `CI18N_MINIMAL` and 4 languages on a 32-bit target |
 | The default catalogue | 3.5 KB of static storage |
 | `CI18N_THREAD_LOCAL_CONTEXT` | 3.5 KB per thread that calls `ci18n_init()` |
 | Loaded translations | about 1.4 times the file size |

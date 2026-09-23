@@ -568,6 +568,7 @@ TEST(test_count_nonexistent_language)
 
 #define TEMP_FILE "ci18n_test_tmp.txt"
 
+#if !defined(CI18N_NO_FILES)
 static int write_file(const char *path, const char *bytes, size_t len)
 {
     FILE *f = fopen(path, "wb");
@@ -586,13 +587,17 @@ static int write_file(const char *path, const char *bytes, size_t len)
     fclose(f);
     return written == len;
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 /* Writes a NUL-terminated fixture. */
 static int write_text(const char *path, const char *text)
 {
     return write_file(path, text, strlen(text));
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_from_file)
 {
     ci18n_init();
@@ -608,7 +613,9 @@ TEST(test_load_language_from_file)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_missing_file)
 {
     ci18n_init();
@@ -620,7 +627,9 @@ TEST(test_load_language_missing_file)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_empty_file)
 {
     ci18n_init();
@@ -632,7 +641,9 @@ TEST(test_load_language_empty_file)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_crlf)
 {
     ci18n_init();
@@ -649,7 +660,9 @@ TEST(test_load_language_crlf)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_lone_cr)
 {
     ci18n_init();
@@ -663,7 +676,9 @@ TEST(test_load_language_lone_cr)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_no_trailing_newline)
 {
     ci18n_init();
@@ -678,7 +693,9 @@ TEST(test_load_language_no_trailing_newline)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_bom)
 {
     ci18n_init();
@@ -694,7 +711,9 @@ TEST(test_load_language_bom)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_comments_and_blank_lines)
 {
     ci18n_init();
@@ -716,7 +735,9 @@ TEST(test_load_language_comments_and_blank_lines)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_malformed_lines_are_skipped)
 {
     ci18n_init();
@@ -740,7 +761,9 @@ TEST(test_load_language_malformed_lines_are_skipped)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_merges_into_existing)
 {
     ci18n_init();
@@ -762,7 +785,9 @@ TEST(test_load_language_merges_into_existing)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_language_utf8_from_file)
 {
     ci18n_init();
@@ -776,11 +801,13 @@ TEST(test_load_language_utf8_from_file)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
 /* ============================================================================
  * Argument handling and limits
  * ============================================================================ */
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_null_arguments)
 {
     ci18n_init();
@@ -815,7 +842,9 @@ TEST(test_null_arguments)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_calls_before_init)
 {
     /* Nothing may touch the context before ci18n_init(). Reached here with
@@ -838,6 +867,7 @@ TEST(test_calls_before_init)
     /* ci18n_free() on an uninitialized context must be a no-op, not a crash. */
     ci18n_free();
 }
+#endif
 
 TEST(test_max_languages)
 {
@@ -952,6 +982,7 @@ TEST(test_language_code_at_the_limit)
     ci18n_free();
 }
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_long_language_code_is_rejected)
 {
     char too_long[CI18N_MAX_CODE_LENGTH + 8];
@@ -977,6 +1008,7 @@ TEST(test_long_language_code_is_rejected)
 
     ci18n_free();
 }
+#endif
 
 /* ============================================================================
  * Storage layer
@@ -1136,6 +1168,7 @@ TEST(test_clear_then_reuse)
     ci18n_free();
 }
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_reload_same_file_twice)
 {
     ci18n_init();
@@ -1156,6 +1189,7 @@ TEST(test_reload_same_file_twice)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
 /* ============================================================================
  * Plurals
@@ -1333,6 +1367,7 @@ TEST(test_load_leaves_no_spare_room)
     ci18n_destroy(cat);
 }
 
+#if !defined(CI18N_NO_ORDINALS)
 TEST(test_rules_match_whole_subtag)
 {
     /* "ruq" is Megleno-Romanian, not Russian: a lookup that compared only
@@ -1343,6 +1378,7 @@ TEST(test_rules_match_whole_subtag)
     ASSERT(ci18n_ordinal_category("enm", 2) == CI18N_PLURAL_OTHER);
     ASSERT(ci18n_ordinal_category("EN", 2) == CI18N_PLURAL_TWO);
 }
+#endif
 
 TEST(test_direction_right_to_left_languages)
 {
@@ -1700,6 +1736,7 @@ TEST(test_utf8_decode_respects_its_length_limit)
     ASSERT(ci18n_utf8_decode(four_byte_lead, 1) == 0);
 }
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_format_truncation_keeps_utf8_intact)
 {
     char out[8];
@@ -1727,11 +1764,13 @@ TEST(test_format_truncation_keeps_utf8_intact)
 
     ci18n_free();
 }
+#endif
 
 /* ============================================================================
  * Formatters
  * ============================================================================ */
 
+#if !defined(CI18N_NO_FORMAT)
 /* Uppercases ASCII. Follows snprintf, including the measuring call. */
 static size_t fmt_upper(char *out, size_t capacity, const char *value,
                         const char *arg, void *user_data)
@@ -1755,7 +1794,9 @@ static size_t fmt_upper(char *out, size_t capacity, const char *value,
 
     return len;
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 /* Repeats the value as many times as the argument asks. */
 static size_t fmt_repeat(char *out, size_t capacity, const char *value,
                          const char *arg, void *user_data)
@@ -1790,7 +1831,9 @@ static size_t fmt_repeat(char *out, size_t capacity, const char *value,
 
     return needed;
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 /* Records what it was handed, so the plumbing can be checked. */
 static char seen_value[64];
 static char seen_arg[64];
@@ -1811,7 +1854,9 @@ static size_t fmt_spy(char *out, size_t capacity, const char *value,
     }
     return 0;
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 /* Always emits the same multi-byte text, to check truncation of its output. */
 static size_t fmt_cyrillic(char *out, size_t capacity, const char *value,
                            const char *arg, void *user_data)
@@ -1838,7 +1883,9 @@ static size_t fmt_cyrillic(char *out, size_t capacity, const char *value,
 
     return len;
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 static void reset_spy(void)
 {
     seen_value[0] = '\0';
@@ -1846,7 +1893,9 @@ static void reset_spy(void)
     seen_user_data = NULL;
     seen_calls = 0;
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_runs_for_a_placeholder)
 {
     char out[64];
@@ -1863,7 +1912,9 @@ TEST(test_formatter_runs_for_a_placeholder)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_receives_value_arg_and_user_data)
 {
     char out[64];
@@ -1894,7 +1945,9 @@ TEST(test_formatter_receives_value_arg_and_user_data)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_argument_reaches_the_formatter)
 {
     char out[64];
@@ -1910,7 +1963,9 @@ TEST(test_formatter_argument_reaches_the_formatter)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_unknown_formatter_is_visible_and_reported)
 {
     char out[64];
@@ -1939,7 +1994,9 @@ TEST(test_unknown_formatter_is_visible_and_reported)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_placeholders_without_a_formatter_are_unchanged)
 {
     char out[64];
@@ -1967,7 +2024,9 @@ TEST(test_placeholders_without_a_formatter_are_unchanged)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_measuring_and_truncation)
 {
     char out[8];
@@ -1990,7 +2049,9 @@ TEST(test_formatter_measuring_and_truncation)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_output_is_cut_at_a_character_boundary)
 {
     char out[8];
@@ -2011,7 +2072,9 @@ TEST(test_formatter_output_is_cut_at_a_character_boundary)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_works_with_plurals_and_count)
 {
     char out[64];
@@ -2036,7 +2099,9 @@ TEST(test_formatter_works_with_plurals_and_count)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_registration_is_validated)
 {
     ci18n_init();
@@ -2069,7 +2134,9 @@ TEST(test_formatter_registration_is_validated)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_table_is_bounded_and_replaceable)
 {
     char name[CI18N_MAX_FORMATTER_NAME];
@@ -2103,7 +2170,9 @@ TEST(test_formatter_table_is_bounded_and_replaceable)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_argument_too_long_is_a_parse_error)
 {
     char out[128];
@@ -2135,7 +2204,9 @@ TEST(test_formatter_argument_too_long_is_a_parse_error)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatters_belong_to_their_catalogue)
 {
     ci18n_t *catalog = ci18n_create();
@@ -2170,7 +2241,9 @@ TEST(test_formatters_belong_to_their_catalogue)
     ci18n_destroy(catalog);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_format_in_matches_format)
 {
     ci18n_t *catalog = ci18n_create();
@@ -2209,7 +2282,9 @@ TEST(test_format_in_matches_format)
     ci18n_destroy(catalog);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatters_are_cleared_by_free)
 {
     char out[64];
@@ -2230,7 +2305,9 @@ TEST(test_formatters_are_cleared_by_free)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_formatter_needs_init)
 {
     ci18n_free();
@@ -2241,11 +2318,13 @@ TEST(test_formatter_needs_init)
     ASSERT(!ci18n_remove_formatter("upper"));
     ASSERT(ci18n_last_error() == CI18N_ERR_NOT_INITIALIZED);
 }
+#endif
 
 /* ============================================================================
  * CLDR conformance
  * ============================================================================ */
 
+#if !defined(CI18N_NO_ORDINALS)
 TEST(test_rules_match_cldr_samples)
 {
     /* Every row is a count CLDR itself publishes as an example of a
@@ -2285,6 +2364,7 @@ TEST(test_rules_match_cldr_samples)
              (unsigned)(sizeof(cldr_samples) / sizeof(cldr_samples[0])));
     }
 }
+#endif
 
 TEST(test_plural_fixes_found_by_cldr)
 {
@@ -2333,6 +2413,7 @@ TEST(test_plural_fixes_found_by_cldr)
  * Ordinals
  * ============================================================================ */
 
+#if !defined(CI18N_NO_ORDINALS)
 TEST(test_ordinal_category_english)
 {
     ASSERT(ci18n_ordinal_category("en", 1) == CI18N_PLURAL_ONE);
@@ -2359,7 +2440,9 @@ TEST(test_ordinal_category_english)
     ASSERT(ci18n_ordinal_category("en_US.UTF-8", 3) == CI18N_PLURAL_FEW);
     ASSERT(ci18n_ordinal_category("EN", 1) == CI18N_PLURAL_ONE);
 }
+#endif
 
+#if !defined(CI18N_NO_ORDINALS)
 TEST(test_ordinal_category_differs_from_cardinal)
 {
     /* Russian has three cardinal forms but no ordinal distinction at all,
@@ -2376,7 +2459,9 @@ TEST(test_ordinal_category_differs_from_cardinal)
     ASSERT(ci18n_ordinal_category("fr", 1) == CI18N_PLURAL_ONE);
     ASSERT(ci18n_ordinal_category("fr", 2) == CI18N_PLURAL_OTHER);
 }
+#endif
 
+#if !defined(CI18N_NO_ORDINALS)
 TEST(test_ordinal_category_unknown_language_is_other)
 {
     /* Other is the form every translation has, so it is the safe guess, and
@@ -2390,7 +2475,9 @@ TEST(test_ordinal_category_unknown_language_is_other)
     ASSERT(ci18n_ordinal_category("en", -1) == CI18N_PLURAL_ONE);
     ASSERT(ci18n_ordinal_category("en", -11) == CI18N_PLURAL_OTHER);
 }
+#endif
 
+#if !defined(CI18N_NO_ORDINALS)
 TEST(test_ordinal_lookup)
 {
     ci18n_init();
@@ -2415,6 +2502,7 @@ TEST(test_ordinal_lookup)
 
     ci18n_free();
 }
+#endif
 
 /* A form taken from the fallback language is chosen by the fallback's rules.
  * Found by the server example: Arabic asked for "rank" at 3, has none, and
@@ -2483,6 +2571,7 @@ static const mo_entry_t MO_SAMPLE[] = {
     {MO_STR("menu\4Open"), MO_STR("\xd0\x9e\xd1\x82\xd0\xba\xd1\x80\xd1\x8b\xd1\x82\xd1\x8c")},
 };
 
+#if !defined(CI18N_NO_MO)
 TEST(test_load_mo_both_byte_orders)
 {
     static unsigned char mo[1024];
@@ -2513,7 +2602,9 @@ TEST(test_load_mo_both_byte_orders)
         ci18n_free();
     }
 }
+#endif
 
+#if !defined(CI18N_NO_MO) && !defined(CI18N_NO_FILES)
 TEST(test_load_mo_refuses_what_is_not_one)
 {
     static unsigned char mo[1024];
@@ -2560,8 +2651,10 @@ TEST(test_load_mo_refuses_what_is_not_one)
 
     ci18n_free();
 }
+#endif
 #endif /* CI18N_NO_MO */
 
+#if !defined(CI18N_NO_NUMBERS)
 /* Every language, against what tools/cldr_numbers.py derived from CLDR. */
 TEST(test_format_number_matches_cldr)
 {
@@ -2584,7 +2677,9 @@ TEST(test_format_number_matches_cldr)
     }
     ASSERT(wrong == 0);
 }
+#endif
 
+#if !defined(CI18N_NO_NUMBERS)
 TEST(test_format_number_edges)
 {
     char out[64];
@@ -2624,7 +2719,9 @@ TEST(test_format_number_edges)
     ASSERT_STR_EQ(out, "1");
     ASSERT(ci18n_utf8_valid(out));
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_NUMBERS)
 static size_t shout_number(char *out, size_t capacity, const char *value,
                            const char *arg, void *user_data)
 {
@@ -2632,7 +2729,9 @@ static size_t shout_number(char *out, size_t capacity, const char *value,
     (void)user_data;
     return (size_t)snprintf(out, capacity, "<%s>", value);
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_NUMBERS)
 TEST(test_number_formatter_in_translations)
 {
     char out[128];
@@ -2664,6 +2763,7 @@ TEST(test_number_formatter_in_translations)
 
     ci18n_free();
 }
+#endif
 
 TEST(test_bidi_isolate)
 {
@@ -2688,6 +2788,7 @@ TEST(test_bidi_isolate)
     ASSERT_STR_EQ(ci18n_bidi_mark(CI18N_DIR_LTR), CI18N_LRM);
 }
 
+#if !defined(CI18N_NO_FORMAT)
 static size_t upper_formatter(char *out, size_t capacity, const char *value,
                               const char *arg, void *user_data)
 {
@@ -2706,7 +2807,9 @@ static size_t upper_formatter(char *out, size_t capacity, const char *value,
     }
     return len;
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 /* A cut result is a prefix of the full one. Before, a short piece after
  * the cut could still slip into the bytes a dropped partial character
  * left free: "{v}!" with v = "aб" in 3 bytes gave "a!". */
@@ -2723,7 +2826,9 @@ TEST(test_format_truncation_is_a_prefix)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_bidi_isolation_in_format)
 {
     char out[128];
@@ -2774,7 +2879,9 @@ TEST(test_bidi_isolation_in_format)
     ASSERT_STR_EQ(out, "Hi Bob");
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_ORDINALS)
 TEST(test_forms_from_the_fallback_use_its_rules)
 {
     ci18n_init();
@@ -2802,7 +2909,9 @@ TEST(test_forms_from_the_fallback_use_its_rules)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_ORDINALS)
 TEST(test_ordinal_lookup_falls_back_like_plurals)
 {
     ci18n_init();
@@ -2825,7 +2934,9 @@ TEST(test_ordinal_lookup_falls_back_like_plurals)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_ORDINALS)
 TEST(test_format_ordinal)
 {
     char out[64];
@@ -2857,7 +2968,9 @@ TEST(test_format_ordinal)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_ORDINALS)
 TEST(test_ordinal_in_a_catalogue)
 {
     ci18n_t *catalog = ci18n_create();
@@ -2887,6 +3000,7 @@ TEST(test_ordinal_in_a_catalogue)
 
     ci18n_destroy(catalog);
 }
+#endif
 
 TEST(test_plural_lookup_russian)
 {
@@ -3318,6 +3432,7 @@ TEST(test_escapes_survive_update_paths)
  * Interpolation
  * ============================================================================ */
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_format_substitutes_by_name)
 {
     char out[128];
@@ -3332,7 +3447,9 @@ TEST(test_format_substitutes_by_name)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_format_order_is_the_translations_business)
 {
     char out[128];
@@ -3354,7 +3471,9 @@ TEST(test_format_order_is_the_translations_business)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_format_repeated_unused_and_missing)
 {
     char out[128];
@@ -3386,7 +3505,9 @@ TEST(test_format_repeated_unused_and_missing)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_format_braces_and_malformed_placeholders)
 {
     char out[128];
@@ -3416,7 +3537,9 @@ TEST(test_format_braces_and_malformed_placeholders)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_format_truncation_and_measuring)
 {
     char out[8];
@@ -3448,7 +3571,9 @@ TEST(test_format_truncation_and_measuring)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_format_plural_provides_count)
 {
     char out[128];
@@ -3487,7 +3612,9 @@ TEST(test_format_plural_provides_count)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 TEST(test_format_plural_mixes_pairs_and_overrides_count)
 {
     char out[128];
@@ -3515,11 +3642,13 @@ TEST(test_format_plural_mixes_pairs_and_overrides_count)
 
     ci18n_free();
 }
+#endif
 
 /* ============================================================================
  * Locale detection
  * ============================================================================ */
 
+#if !defined(CI18N_NO_LOCALE)
 TEST(test_set_current_best_walks_the_chain)
 {
     ci18n_init();
@@ -3546,7 +3675,9 @@ TEST(test_set_current_best_walks_the_chain)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_LOCALE)
 TEST(test_set_current_best_leaves_current_alone_on_failure)
 {
     ci18n_init();
@@ -3563,7 +3694,9 @@ TEST(test_set_current_best_leaves_current_alone_on_failure)
 
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_LOCALE)
 TEST(test_detect_locale)
 {
     char buffer[CI18N_MAX_CODE_LENGTH];
@@ -3590,6 +3723,7 @@ TEST(test_detect_locale)
 
     ci18n_free();
 }
+#endif
 
 /* ============================================================================
  * Diagnostics
@@ -3668,6 +3802,7 @@ TEST(test_last_error_language_and_key)
     ci18n_free();
 }
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_last_error_file_not_found)
 {
     ci18n_init();
@@ -3677,6 +3812,7 @@ TEST(test_last_error_file_not_found)
 
     ci18n_free();
 }
+#endif
 
 TEST(test_last_error_limits)
 {
@@ -3749,6 +3885,7 @@ TEST(test_has_does_not_report_a_failure)
     ci18n_free();
 }
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_stats_clean_file)
 {
     const ci18n_load_stats_t *st;
@@ -3775,7 +3912,9 @@ TEST(test_load_stats_clean_file)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_stats_malformed_lines)
 {
     const ci18n_load_stats_t *st;
@@ -3802,7 +3941,9 @@ TEST(test_load_stats_malformed_lines)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_stats_reports_truncation)
 {
     char line[CI18N_MAX_KEY_LENGTH + CI18N_MAX_VALUE_LENGTH + 128];
@@ -3843,7 +3984,9 @@ TEST(test_load_stats_reports_truncation)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
+#if !defined(CI18N_NO_FILES)
 TEST(test_load_stats_over_long_line)
 {
     static char line[CI18N_MAX_LINE_LENGTH * 2];
@@ -3885,6 +4028,7 @@ TEST(test_load_stats_over_long_line)
     remove(TEMP_FILE);
     ci18n_free();
 }
+#endif
 
 TEST(test_load_stats_from_buffer)
 {
@@ -3959,32 +4103,62 @@ int main(void)
     RUN_TEST(test_get_current);
     RUN_TEST(test_count_nonexistent_language);
 
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_from_file);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_missing_file);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_empty_file);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_crlf);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_lone_cr);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_no_trailing_newline);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_bom);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_comments_and_blank_lines);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_malformed_lines_are_skipped);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_merges_into_existing);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_language_utf8_from_file);
+#endif
 
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_null_arguments);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_calls_before_init);
+#endif
     RUN_TEST(test_max_languages);
     RUN_TEST(test_max_keys_per_language);
     RUN_TEST(test_long_key_is_truncated);
     RUN_TEST(test_long_value_is_truncated);
     RUN_TEST(test_language_code_at_the_limit);
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_long_language_code_is_rejected);
+#endif
 
     RUN_TEST(test_many_keys_all_reachable);
     RUN_TEST(test_remove_keeps_the_rest_reachable);
     RUN_TEST(test_value_update_shorter_and_longer);
     RUN_TEST(test_clear_then_reuse);
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_reload_same_file_twice);
+#endif
 
     RUN_TEST(test_plural_category_english);
     RUN_TEST(test_plural_category_russian);
@@ -3992,29 +4166,63 @@ int main(void)
     RUN_TEST(test_plural_negative_counts);
     RUN_TEST(test_plural_category_names);
     RUN_TEST(test_plural_category_ignores_case);
+#if !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_rules_match_whole_subtag);
+#endif
     RUN_TEST(test_load_leaves_no_spare_room);
+#if !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_rules_match_cldr_samples);
+#endif
     RUN_TEST(test_plural_fixes_found_by_cldr);
 
+#if !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_ordinal_category_english);
+#endif
+#if !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_ordinal_category_differs_from_cardinal);
+#endif
+#if !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_ordinal_category_unknown_language_is_other);
+#endif
+#if !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_ordinal_lookup);
+#endif
+#if !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_ordinal_lookup_falls_back_like_plurals);
+#endif
+#if !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_forms_from_the_fallback_use_its_rules);
+#endif
 #ifndef CI18N_NO_MO
+#if !defined(CI18N_NO_MO)
     RUN_TEST(test_load_mo_both_byte_orders);
+#endif
+#if !defined(CI18N_NO_MO) && !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_mo_refuses_what_is_not_one);
 #endif
+#endif
+#if !defined(CI18N_NO_NUMBERS)
     RUN_TEST(test_format_number_matches_cldr);
+#endif
+#if !defined(CI18N_NO_NUMBERS)
     RUN_TEST(test_format_number_edges);
+#endif
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_NUMBERS)
     RUN_TEST(test_number_formatter_in_translations);
+#endif
     RUN_TEST(test_bidi_isolate);
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_truncation_is_a_prefix);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_bidi_isolation_in_format);
+#endif
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_format_ordinal);
+#endif
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_ORDINALS)
     RUN_TEST(test_ordinal_in_a_catalogue);
+#endif
 
     RUN_TEST(test_direction_right_to_left_languages);
     RUN_TEST(test_direction_left_to_right_languages);
@@ -4033,23 +4241,55 @@ int main(void)
     RUN_TEST(test_utf8_sequence_length_steps_one_character);
     RUN_TEST(test_utf8_truncate_cuts_at_a_boundary);
     RUN_TEST(test_utf8_decode_respects_its_length_limit);
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_truncation_keeps_utf8_intact);
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_runs_for_a_placeholder);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_receives_value_arg_and_user_data);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_argument_reaches_the_formatter);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_unknown_formatter_is_visible_and_reported);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_placeholders_without_a_formatter_are_unchanged);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_measuring_and_truncation);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_output_is_cut_at_a_character_boundary);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_works_with_plurals_and_count);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_registration_is_validated);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_table_is_bounded_and_replaceable);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_argument_too_long_is_a_parse_error);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatters_belong_to_their_catalogue);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_in_matches_format);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatters_are_cleared_by_free);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_formatter_needs_init);
+#endif
     RUN_TEST(test_plural_lookup_russian);
     RUN_TEST(test_plural_falls_back_through_other_then_plain);
     RUN_TEST(test_plural_guards);
@@ -4072,30 +4312,60 @@ int main(void)
     RUN_TEST(test_set_does_not_decode_escapes);
     RUN_TEST(test_escapes_survive_update_paths);
 
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_substitutes_by_name);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_order_is_the_translations_business);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_repeated_unused_and_missing);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_braces_and_malformed_placeholders);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_truncation_and_measuring);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_plural_provides_count);
+#endif
+#if !defined(CI18N_NO_FORMAT)
     RUN_TEST(test_format_plural_mixes_pairs_and_overrides_count);
+#endif
 
+#if !defined(CI18N_NO_LOCALE)
     RUN_TEST(test_set_current_best_walks_the_chain);
+#endif
+#if !defined(CI18N_NO_LOCALE)
     RUN_TEST(test_set_current_best_leaves_current_alone_on_failure);
+#endif
+#if !defined(CI18N_NO_LOCALE)
     RUN_TEST(test_detect_locale);
+#endif
 
     RUN_TEST(test_error_string_covers_every_code);
     RUN_TEST(test_last_error_before_init);
     RUN_TEST(test_last_error_invalid_argument);
     RUN_TEST(test_last_error_language_and_key);
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_last_error_file_not_found);
+#endif
     RUN_TEST(test_last_error_limits);
     RUN_TEST(test_success_clears_last_error);
     RUN_TEST(test_has_does_not_report_a_failure);
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_stats_clean_file);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_stats_malformed_lines);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_stats_reports_truncation);
+#endif
+#if !defined(CI18N_NO_FILES)
     RUN_TEST(test_load_stats_over_long_line);
+#endif
     RUN_TEST(test_load_stats_from_buffer);
     RUN_TEST(test_load_stats_reset_between_loads);
 

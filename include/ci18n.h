@@ -143,6 +143,43 @@ extern "C"
 #define CI18N_MAX_CODE_LENGTH 32
 #endif
 
+/*
+ * Leave parts out. Each of these removes a feature, its code and its data,
+ * and the matching functions stop being declared, so a call to one is a
+ * compile error rather than a surprise. Nothing is left out by default.
+ *
+ *   CI18N_NO_FORMAT    ci18n_format and relatives, formatters, bidi isolation
+ *   CI18N_NO_NUMBERS   ci18n_format_number and the {n:number} formatter
+ *   CI18N_NO_ORDINALS  ci18n_ordinal and relatives
+ *   CI18N_NO_LOCALE    ci18n_detect_locale and ci18n_set_current_best
+ *   CI18N_NO_MO        the gettext .mo loader
+ *   CI18N_NO_FILES     every loader that opens a file; buffers still load
+ *   CI18N_MINIMAL      all of the above
+ *
+ * What stays in any build: loading from buffers, lookup, plurals, fallback,
+ * catalogues, text direction, the UTF-8 helpers and the diagnostics.
+ */
+#ifdef CI18N_MINIMAL
+#ifndef CI18N_NO_FORMAT
+#define CI18N_NO_FORMAT
+#endif
+#ifndef CI18N_NO_NUMBERS
+#define CI18N_NO_NUMBERS
+#endif
+#ifndef CI18N_NO_ORDINALS
+#define CI18N_NO_ORDINALS
+#endif
+#ifndef CI18N_NO_LOCALE
+#define CI18N_NO_LOCALE
+#endif
+#ifndef CI18N_NO_MO
+#define CI18N_NO_MO
+#endif
+#ifndef CI18N_NO_FILES
+#define CI18N_NO_FILES
+#endif
+#endif
+
 /* How many formatters one catalogue can hold. Applications register a handful
  * at startup, so the table is small and lives in the catalogue rather than on
  * the heap. */
@@ -454,9 +491,11 @@ typedef union
         char fallback_language[CI18N_MAX_CODE_LENGTH];
         ci18n_error_t last_error;
         ci18n_load_stats_t load_stats;
+#ifndef CI18N_NO_FORMAT
         ci18n_formatter_t formatters[CI18N_MAX_FORMATTERS];
         size_t formatter_count;
         bool bidi_isolation; /* wrap filled-in values in FSI ... PDI */
+#endif
         bool initialized;
 #ifdef CI18N_THREAD_SHARED
         /* Inside the catalogue, not beside the global, so that every
@@ -523,6 +562,7 @@ typedef union
     /* Shutdown and free all resources. */
     CI18N_DEF void ci18n_free(void);
 
+#if !defined(CI18N_NO_FILES)
     /*
      * Load translations from a file.
      *
@@ -536,6 +576,7 @@ typedef union
      * Returns: true if the file was read, false on failure
      */
     CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepath);
+#endif
 
     /*
      * Load translations from a memory buffer.
@@ -549,6 +590,7 @@ typedef union
     CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length);
 
 #ifndef CI18N_NO_MO
+#if !defined(CI18N_NO_FILES)
     /*
      * Load a compiled gettext catalogue, a .mo file, into a language.
      *
@@ -580,6 +622,7 @@ typedef union
      * (CI18N_ERR_PARSE), true otherwise; see ci18n_last_load_stats()
      */
     CI18N_DEF bool ci18n_load_mo(const char *language_code, const char *filepath);
+#endif
 
     /* The same, from bytes already in memory, such as a catalogue embedded in
      * the binary. The buffer is only read during the call. */
@@ -827,6 +870,7 @@ typedef union
      */
     CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count);
 
+#if !defined(CI18N_NO_ORDINALS)
     /*
      * Which category `count` falls into as an ordinal: first, second, third,
      * rather than one, two, three.
@@ -870,6 +914,7 @@ typedef union
      * Returns: translation string, or the key if nothing was found
      */
     CI18N_DEF const char *ci18n_ordinal_or_key(const char *key, long count);
+#endif
 
     /* ============================================================================
      * Text direction
@@ -963,6 +1008,7 @@ typedef union
 #define CI18N_LRM "\xE2\x80\x8E" /* U+200E LEFT-TO-RIGHT MARK */
 #define CI18N_RLM "\xE2\x80\x8F" /* U+200F RIGHT-TO-LEFT MARK */
 
+#if !defined(CI18N_NO_FORMAT)
     /*
      * Isolate every value ci18n_format() and its relatives fill in.
      *
@@ -977,6 +1023,7 @@ typedef union
      * Returns: false only before ci18n_init()
      */
     CI18N_DEF bool ci18n_set_bidi_isolation(bool enabled);
+#endif
 
     /*
      * Copy text into out wrapped in FSI ... PDI, for a value you place
@@ -1025,6 +1072,7 @@ typedef union
      * like "1.2K" and native digits are not here.
      */
 
+#if !defined(CI18N_NO_NUMBERS)
     /*
      * Write `number` the way `language_code` writes it.
      *
@@ -1037,6 +1085,7 @@ typedef union
     CI18N_DEF size_t ci18n_format_number(char *out, size_t capacity,
                                          const char *language_code,
                                          const char *number, int fraction_digits);
+#endif
 
     /* ============================================================================
      * Interpolation
@@ -1062,6 +1111,7 @@ typedef union
      * ci18n_format_plural() which does it for the count.
      * ============================================================================ */
 
+#if !defined(CI18N_NO_FORMAT)
     /*
      * Fill a translation's placeholders from name and value pairs.
      *
@@ -1107,7 +1157,9 @@ typedef union
      */
     CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key,
                                          long count, ...);
+#endif
 
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_ORDINALS)
     /*
      * Pick the ordinal form for `count`, then fill its placeholders.
      *
@@ -1124,6 +1176,7 @@ typedef union
      */
     CI18N_DEF size_t ci18n_format_ordinal(char *out, size_t capacity, const char *key,
                                           long count, ...);
+#endif
 
     /* ============================================================================
      * UTF-8
@@ -1258,6 +1311,7 @@ typedef union
      * two locks at once.
      * ============================================================================ */
 
+#if !defined(CI18N_NO_FORMAT)
     /*
      * Register `fn` under `name`, replacing any formatter already there.
      *
@@ -1285,11 +1339,13 @@ typedef union
      * Returns: true if one was removed, false if there was no such formatter
      */
     CI18N_DEF bool ci18n_remove_formatter(const char *name);
+#endif
 
     /* ============================================================================
      * Locale detection
      * ============================================================================ */
 
+#if !defined(CI18N_NO_LOCALE)
     /*
      * The user's locale, as the environment reports it.
      *
@@ -1322,6 +1378,7 @@ typedef union
      * Returns: true if a language was selected, false if none matched
      */
     CI18N_DEF bool ci18n_set_current_best(const char *locale);
+#endif
 
     /* ============================================================================
      * Catalogues
@@ -1371,18 +1428,24 @@ typedef union
      */
     CI18N_DEF ci18n_t *ci18n_default(void);
 
+#if !defined(CI18N_NO_FILES)
     /* The _in variants. Each behaves exactly as the function it is named
      * after, on the catalogue given rather than on the default one. */
     CI18N_DEF bool ci18n_load_language_in(ci18n_t *catalog, const char *language_code, const char *filepath);
+#endif
     CI18N_DEF bool ci18n_load_from_buffer_in(ci18n_t *catalog, const char *language_code, const char *buffer, size_t length);
 #ifndef CI18N_NO_MO
+#if !defined(CI18N_NO_FILES)
     CI18N_DEF bool ci18n_load_mo_in(ci18n_t *catalog, const char *language_code, const char *filepath);
+#endif
     CI18N_DEF bool ci18n_load_mo_from_buffer_in(ci18n_t *catalog, const char *language_code,
                                                 const void *data, size_t length);
 #endif
     CI18N_DEF bool ci18n_set_current_in(ci18n_t *catalog, const char *language_code);
     CI18N_DEF bool ci18n_set_fallback_in(ci18n_t *catalog, const char *language_code);
+#if !defined(CI18N_NO_LOCALE)
     CI18N_DEF bool ci18n_set_current_best_in(ci18n_t *catalog, const char *locale);
+#endif
     CI18N_DEF bool ci18n_set_in(ci18n_t *catalog, const char *language_code, const char *key, const char *value);
     CI18N_DEF bool ci18n_remove_in(ci18n_t *catalog, const char *language_code, const char *key);
     CI18N_DEF bool ci18n_clear_in(ci18n_t *catalog, const char *language_code);
@@ -1398,6 +1461,7 @@ typedef union
     CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF ci18n_direction_t ci18n_current_direction_in(ci18n_t *catalog);
+#if !defined(CI18N_NO_FORMAT)
     CI18N_DEF bool ci18n_set_bidi_isolation_in(ci18n_t *catalog, bool enabled);
     CI18N_DEF bool ci18n_set_formatter_in(ci18n_t *catalog, const char *name,
                                           ci18n_formatter_fn fn, void *user_data);
@@ -1406,10 +1470,15 @@ typedef union
                                      const char *key, ...);
     CI18N_DEF size_t ci18n_format_plural_in(ci18n_t *catalog, char *out, size_t capacity,
                                             const char *key, long count, ...);
+#endif
+#if !defined(CI18N_NO_ORDINALS)
     CI18N_DEF const char *ci18n_ordinal_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF const char *ci18n_ordinal_or_key_in(ci18n_t *catalog, const char *key, long count);
+#endif
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_ORDINALS)
     CI18N_DEF size_t ci18n_format_ordinal_in(ci18n_t *catalog, char *out, size_t capacity,
                                              const char *key, long count, ...);
+#endif
 
     /* Diagnostics for a specific catalogue. In the shared threading mode the
      * plain versions are per-thread, which is what a caller wants; these
@@ -2471,9 +2540,11 @@ static void ci18n_reset_data(ci18n_t *ctx)
     ctx->fallback_language[0] = 0;
     ctx->last_error = CI18N_OK;
     memset(&ctx->load_stats, 0, sizeof(ctx->load_stats));
+#ifndef CI18N_NO_FORMAT
     memset(ctx->formatters, 0, sizeof(ctx->formatters));
     ctx->formatter_count = 0;
     ctx->bidi_isolation = false;
+#endif
     ctx->initialized = false;
 }
 
@@ -2623,6 +2694,7 @@ static void ci18n_lines_finish(ci18n_t *ctx, ci18n_language_t *lang, ci18n_lines
 #define CI18N_CRT_WARNINGS_ON
 #endif
 
+#if !defined(CI18N_NO_FILES)
 static bool ci18n_load_language_impl(ci18n_t *ctx, const char *language_code, const char *filepath)
 {
     FILE *file;
@@ -2699,6 +2771,7 @@ CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepa
 
     return result;
 }
+#endif
 
 
 static bool ci18n_load_from_buffer_impl(ci18n_t *ctx, const char *language_code, const char *buffer, size_t length)
@@ -3080,6 +3153,7 @@ static bool ci18n_load_mo_from_buffer_impl(ci18n_t *ctx, const char *language_co
     return ci18n_finish_load(ctx);
 }
 
+#if !defined(CI18N_NO_FILES)
 static bool ci18n_load_mo_impl(ci18n_t *ctx, const char *language_code, const char *filepath)
 {
     FILE *file;
@@ -3147,6 +3221,7 @@ CI18N_DEF bool ci18n_load_mo(const char *language_code, const char *filepath)
 {
     return ci18n_load_mo_in(&ci18n_ctx, language_code, filepath);
 }
+#endif
 
 CI18N_DEF bool ci18n_load_mo_from_buffer_in(ci18n_t *catalog, const char *language_code,
                                             const void *data, size_t length)
@@ -3782,7 +3857,9 @@ CI18N_DEF size_t ci18n_foreach(const char *language_code, ci18n_entry_fn fn,
  * must not call the locking wrappers: these locks are not recursive. */
 static const char *ci18n_get_impl(ci18n_t *ctx, const char *key);
 static const char *ci18n_plural_impl(ci18n_t *ctx, const char *key, long count);
+#if !defined(CI18N_NO_ORDINALS)
 static const char *ci18n_ordinal_impl(ci18n_t *ctx, const char *key, long count);
+#endif
 
 /*
  * Writes into the caller's buffer while counting what the whole result would
@@ -4101,6 +4178,7 @@ static void ci18n_sink_put(ci18n_sink_t *sink, const char *text, size_t len)
     }
 }
 
+#if !defined(CI18N_NO_FORMAT)
 /*
  * Find a placeholder's value among the name and value pairs.
  *
@@ -4212,6 +4290,7 @@ static bool ci18n_copy_bounded(char *out, size_t capacity, const char *text, siz
     out[len] = '\0';
     return true;
 }
+#endif
 
 /*
  * Expand {placeholders} in `text`.
@@ -4225,10 +4304,13 @@ static bool ci18n_copy_bounded(char *out, size_t capacity, const char *text, siz
  * returning early keeps the rest of the sentence intact, which is what a
  * user wants to see.
  */
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_NUMBERS)
 /* The built-in "number" formatter, defined with the number tables below. */
 static size_t ci18n_number_formatter(char *out, size_t capacity, const char *value,
                                      const char *arg, void *user_data);
+#endif
 
+#if !defined(CI18N_NO_FORMAT)
 static size_t ci18n_expand(ci18n_t *ctx, char *out, size_t capacity,
                            const char *text, va_list args,
                            const char *count_text, ci18n_error_t *problem)
@@ -4315,7 +4397,9 @@ static size_t ci18n_expand(ci18n_t *ctx, char *out, size_t capacity,
         if (value && spec)
         {
             const ci18n_formatter_t *formatter = NULL;
+#ifndef CI18N_NO_NUMBERS
             ci18n_formatter_t builtin;
+#endif
             char formatter_name[CI18N_MAX_FORMATTER_NAME];
             char formatter_arg[CI18N_MAX_FORMATTER_ARG];
             size_t select_len = 0;
@@ -4350,6 +4434,7 @@ static size_t ci18n_expand(ci18n_t *ctx, char *out, size_t capacity,
             {
                 formatter = ci18n_find_formatter(ctx, formatter_name);
 
+#ifndef CI18N_NO_NUMBERS
                 /* Built in, and found last, so a registered one of the same
                  * name wins. */
                 if (!formatter && strcmp(formatter_name, "number") == 0)
@@ -4358,6 +4443,7 @@ static size_t ci18n_expand(ci18n_t *ctx, char *out, size_t capacity,
                     builtin.user_data = ctx->current_language;
                     formatter = &builtin;
                 }
+#endif
 
                 if (!formatter)
                 {
@@ -4744,7 +4830,9 @@ CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key
     CI18N_READ_UNLOCK(&ci18n_ctx);
     return needed;
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_ORDINALS)
 CI18N_DEF size_t ci18n_format_ordinal_in(ci18n_t *catalog, char *out, size_t capacity,
                                          const char *key, long count, ...)
 {
@@ -4813,6 +4901,7 @@ CI18N_DEF size_t ci18n_format_ordinal(char *out, size_t capacity, const char *ke
     CI18N_READ_UNLOCK(&ci18n_ctx);
     return needed;
 }
+#endif
 
 
 /*
@@ -5244,6 +5333,7 @@ CI18N_DEF ci18n_plural_category_t ci18n_plural_category(const char *language_cod
 }
 
 
+#if !defined(CI18N_NO_ORDINALS)
 /*
  * Ordinal rules, CLDR 48, grouped the same way as the cardinal ones. Only the
  * languages that have something other than "other" are listed: everything
@@ -5524,6 +5614,7 @@ CI18N_DEF ci18n_plural_category_t ci18n_ordinal_category(const char *language_co
 
     return CI18N_PLURAL_OTHER;
 }
+#endif
 
 CI18N_DEF const char *ci18n_plural_category_name(ci18n_plural_category_t category)
 {
@@ -5671,6 +5762,7 @@ CI18N_DEF ci18n_direction_t ci18n_current_direction(void)
     return ci18n_current_direction_in(&ci18n_ctx);
 }
 
+#if !defined(CI18N_NO_FORMAT)
 static bool ci18n_set_bidi_isolation_impl(ci18n_t *ctx, bool enabled)
 {
     if (!ctx->initialized)
@@ -5698,6 +5790,7 @@ CI18N_DEF bool ci18n_set_bidi_isolation(bool enabled)
 {
     return ci18n_set_bidi_isolation_in(&ci18n_ctx, enabled);
 }
+#endif
 
 CI18N_DEF size_t ci18n_bidi_isolate(char *out, size_t capacity, const char *text)
 {
@@ -5739,6 +5832,7 @@ CI18N_DEF const char *ci18n_bidi_mark(ci18n_direction_t direction)
  * Numbers
  * ============================================================================ */
 
+#if !defined(CI18N_NO_NUMBERS)
 typedef struct ci18n_number_shape
 {
     const char *decimal;
@@ -6002,7 +6096,9 @@ CI18N_DEF size_t ci18n_format_number(char *out, size_t capacity,
     }
     return sink.needed;
 }
+#endif
 
+#if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_NUMBERS)
 static size_t ci18n_number_formatter(char *out, size_t capacity, const char *value,
                                      const char *arg, void *user_data)
 {
@@ -6017,6 +6113,7 @@ static size_t ci18n_number_formatter(char *out, size_t capacity, const char *val
 
     return ci18n_format_number(out, capacity, (const char *)user_data, value, digits);
 }
+#endif
 
 /* Build "key[suffix]", or report that it will not fit. */
 static bool ci18n_plural_key(char *out, size_t capacity, const char *key, const char *suffix)
@@ -6077,8 +6174,13 @@ static const char *ci18n_forms_one(ci18n_t *ctx, const char *code, const char *k
         return NULL;
     }
 
+#ifndef CI18N_NO_ORDINALS
     category = ordinal ? ci18n_ordinal_category(code, count)
                        : ci18n_plural_category(code, count);
+#else
+    (void)ordinal;
+    category = ci18n_plural_category(code, count);
+#endif
 
     /* The exact form for this count. */
     if (ci18n_plural_key(buffer, sizeof(buffer), key, ci18n_plural_category_name(category)))
@@ -6158,10 +6260,12 @@ static const char *ci18n_plural_impl(ci18n_t *ctx, const char *key, long count)
     return ci18n_forms_impl(ctx, key, count, false);
 }
 
+#if !defined(CI18N_NO_ORDINALS)
 static const char *ci18n_ordinal_impl(ci18n_t *ctx, const char *key, long count)
 {
     return ci18n_forms_impl(ctx, key, count, true);
 }
+#endif
 
 static const char *ci18n_plural_or_key_impl(ci18n_t *ctx, const char *key, long count)
 {
@@ -6170,12 +6274,14 @@ static const char *ci18n_plural_or_key_impl(ci18n_t *ctx, const char *key, long 
     return result ? result : key;
 }
 
+#if !defined(CI18N_NO_ORDINALS)
 static const char *ci18n_ordinal_or_key_impl(ci18n_t *ctx, const char *key, long count)
 {
     const char *result = ci18n_ordinal_impl(ctx, key, count);
 
     return result ? result : key;
 }
+#endif
 CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count)
 {
     const char *result;
@@ -6192,6 +6298,7 @@ CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count)
  * Locale detection
  * ============================================================================ */
 
+#if !defined(CI18N_NO_LOCALE)
 /*
  * Copy a locale name, dropping everything the language tag does not need.
  *
@@ -6380,6 +6487,7 @@ CI18N_DEF bool ci18n_set_current_best(const char *locale)
 
     return result;
 }
+#endif
 
 
 static bool ci18n_is_initialized_impl(ci18n_t *ctx)
@@ -6459,6 +6567,7 @@ CI18N_DEF ci18n_t *ci18n_default(void)
     return &ci18n_ctx;
 }
 
+#if !defined(CI18N_NO_FILES)
 CI18N_DEF bool ci18n_load_language_in(ci18n_t *catalog, const char *language_code, const char *filepath)
 {
     bool result;
@@ -6469,6 +6578,7 @@ CI18N_DEF bool ci18n_load_language_in(ci18n_t *catalog, const char *language_cod
 
     return result;
 }
+#endif
 
 CI18N_DEF bool ci18n_load_from_buffer_in(ci18n_t *catalog, const char *language_code, const char *buffer, size_t length)
 {
@@ -6503,6 +6613,7 @@ CI18N_DEF bool ci18n_set_fallback_in(ci18n_t *catalog, const char *language_code
     return result;
 }
 
+#if !defined(CI18N_NO_LOCALE)
 CI18N_DEF bool ci18n_set_current_best_in(ci18n_t *catalog, const char *locale)
 {
     bool result;
@@ -6513,6 +6624,7 @@ CI18N_DEF bool ci18n_set_current_best_in(ci18n_t *catalog, const char *locale)
 
     return result;
 }
+#endif
 
 CI18N_DEF bool ci18n_set_in(ci18n_t *catalog, const char *language_code, const char *key, const char *value)
 {
@@ -6658,6 +6770,7 @@ CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, 
     return result;
 }
 
+#if !defined(CI18N_NO_ORDINALS)
 CI18N_DEF const char *ci18n_ordinal_in(ci18n_t *catalog, const char *key, long count)
 {
     const char *result;
@@ -6699,6 +6812,7 @@ CI18N_DEF const char *ci18n_ordinal_or_key(const char *key, long count)
 {
     return ci18n_ordinal_or_key_in(&ci18n_ctx, key, count);
 }
+#endif
 
 CI18N_DEF ci18n_error_t ci18n_last_error_in(ci18n_t *catalog)
 {
