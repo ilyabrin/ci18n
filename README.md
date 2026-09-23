@@ -60,10 +60,11 @@ wrong, which is worse than not offering it at all.
 
 ### Not there yet
 
-Planned: text direction for right-to-left languages, per-locale number
-separators, ordinals, and pluggable formatters, so that a `{created:date}`
-placeholder can call a function you supply and the library still needs to
-know nothing about dates.
+Planned: per-locale number separators, ordinals, and pluggable formatters,
+so that a `{created:date}` placeholder can call a function you supply and
+the library still needs to know nothing about dates.
+
+Text direction arrived in 2.7.0, and has a section of its own below.
 
 ### Which one to pick
 
@@ -319,6 +320,48 @@ Arabic, Lithuanian, Latvian, Slovenian, Irish, Romanian, and languages with
 no plural distinction such as Japanese, Chinese and Korean. An unknown
 language is treated as English-like. Only integer counts are considered.
 
+### Text direction
+
+Arabic, Hebrew and Persian are written right to left, and an interface has to
+know which way round to put things. The direction is a property of the
+language, so the library answers that; the layout is yours.
+
+```c
+ci18n_set_current("ar");
+
+ci18n_current_direction();                        /* CI18N_DIR_RTL */
+ci18n_direction_name(ci18n_current_direction());  /* "rtl" */
+```
+
+The names are the ones HTML and CSS use, so they drop straight in:
+
+```c
+printf("<html lang=\"%s\" dir=\"%s\">\n",
+       ci18n_get_current(),
+       ci18n_direction_name(ci18n_current_direction()));
+```
+
+`ci18n_direction(code)` answers for any code without touching the current
+language. A script subtag decides on its own, because direction belongs to
+the script rather than the language:
+
+| Code | Direction | Why |
+| --- | --- | --- |
+| `ar`, `ar-EG`, `ar_EG.UTF-8` | rtl | Arabic, region and charset ignored |
+| `he`, `fa`, `ur`, `ps`, `dv`, `yi`, `ckb` | rtl | default script is right to left |
+| `ku`, `az`, `pa` | ltr | Latin or Gurmukhi unless told otherwise |
+| `az-Arab`, `pa-Arab`, `ku-Arab` | rtl | the script subtag overrides |
+| `ar-Latn` | ltr | romanized Arabic reads left to right |
+| `xx`, `""`, `NULL` | ltr | unknown, and left to right is the safe guess |
+
+An unknown language is left to right. That is the commoner answer and the
+safer one: a left-to-right interface shown right to left is broken in a way
+nobody misses, while the reverse merely looks untranslated.
+
+This is direction only, not bidirectional text. Putting an English product
+name inside an Arabic sentence correctly needs the Unicode bidirectional
+algorithm, which is not here.
+
 ### Interpolation
 
 Values go into translations by name, not by position, because the order they
@@ -537,6 +580,9 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_plural_or_key(key, n)`            | Plural form, or the key |
 | `ci18n_plural_category(lang, n)`         | CLDR category for a count |
 | `ci18n_plural_category_name(cat)`        | Category as text      |
+| `ci18n_direction(code)`                  | Which way a language is written |
+| `ci18n_direction_name(dir)`              | Direction as "ltr" or "rtl" |
+| `ci18n_current_direction()`              | Direction of the current language |
 | `ci18n_format(out, cap, key, ...)`       | Fill named placeholders |
 | `ci18n_format_plural(out, cap, key, n, ...)` | Plural form, filled |
 | `ci18n_detect_locale(out, cap)`          | Locale from the system |
@@ -560,7 +606,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.6.2)
+  GIT_TAG v2.7.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

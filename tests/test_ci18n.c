@@ -1216,6 +1216,169 @@ TEST(test_plural_category_names)
     ASSERT_STR_EQ(ci18n_plural_category_name((ci18n_plural_category_t)999), "other");
 }
 
+TEST(test_plural_category_ignores_case)
+{
+    /* BCP 47 subtags are case-insensitive, so an upper-case code must not
+     * fall through to the English rule. */
+    ASSERT(ci18n_plural_category("RU", 2) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("Ru", 5) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("ru_RU", 2) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("RU_ru.UTF-8", 3) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_plural_category("JA", 1) == CI18N_PLURAL_OTHER);
+}
+
+TEST(test_direction_right_to_left_languages)
+{
+    ASSERT(ci18n_direction("ar") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("he") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("fa") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ur") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ps") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("sd") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ug") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("dv") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("yi") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ckb") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("prs") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("syr") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("nqo") == CI18N_DIR_RTL);
+
+    /* The pre-1989 codes for Hebrew and Yiddish are still in circulation. */
+    ASSERT(ci18n_direction("iw") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ji") == CI18N_DIR_RTL);
+}
+
+TEST(test_direction_left_to_right_languages)
+{
+    ASSERT(ci18n_direction("en") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction("ru") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction("ja") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction("tr") == CI18N_DIR_LTR);
+
+    /* Written in Latin or Gurmukhi unless a script subtag says otherwise,
+     * which is exactly why they are not in the table. */
+    ASSERT(ci18n_direction("ku") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction("az") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction("pa") == CI18N_DIR_LTR);
+
+    /* Unknown and absent both mean left to right. */
+    ASSERT(ci18n_direction("xx") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction("") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction(NULL) == CI18N_DIR_LTR);
+}
+
+TEST(test_direction_script_subtag_wins)
+{
+    /* A right-to-left script on a left-to-right language. */
+    ASSERT(ci18n_direction("az-Arab") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("pa-Arab") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ku-Arab") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ff-Adlm") == CI18N_DIR_RTL);
+
+    /* And the other way round: romanized Arabic reads left to right. */
+    ASSERT(ci18n_direction("ar-Latn") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction("fa-Latn") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction("az-Cyrl") == CI18N_DIR_LTR);
+
+    /* A script that agrees with the language changes nothing. */
+    ASSERT(ci18n_direction("ar-Arab") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("he-Hebr") == CI18N_DIR_RTL);
+
+    /* A script plus a region still works. */
+    ASSERT(ci18n_direction("az-Arab-IR") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ar-Latn-EG") == CI18N_DIR_LTR);
+}
+
+TEST(test_direction_reads_only_real_script_subtags)
+{
+    /* A region is two letters or three digits, not four, so it must not be
+     * mistaken for a script. */
+    ASSERT(ci18n_direction("ar-EG") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ar-001") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ar_EG.UTF-8") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("en-US") == CI18N_DIR_LTR);
+
+    /* "AR" here is Argentina, and Azerbaijani is still left to right. */
+    ASSERT(ci18n_direction("az-AR") == CI18N_DIR_LTR);
+
+    /* Four letters have to be the whole subtag: "Arabic" is not "Arab",
+     * and neither is the "Arab" in a malformed "Arab1". */
+    ASSERT(ci18n_direction("az-Arabic") == CI18N_DIR_LTR);
+    ASSERT(ci18n_direction("az-Arab1") == CI18N_DIR_LTR);
+
+    /* A variant subtag is five characters or more, so it is not a script. */
+    ASSERT(ci18n_direction("de-1996") == CI18N_DIR_LTR);
+}
+
+TEST(test_direction_ignores_case)
+{
+    ASSERT(ci18n_direction("AR") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("Ar") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("HE-il") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("EN") == CI18N_DIR_LTR);
+
+    /* Script subtags too, however they are cased. */
+    ASSERT(ci18n_direction("az-arab") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("AZ-ARAB") == CI18N_DIR_RTL);
+    ASSERT(ci18n_direction("ar-LATN") == CI18N_DIR_LTR);
+}
+
+TEST(test_direction_names)
+{
+    ASSERT_STR_EQ(ci18n_direction_name(CI18N_DIR_LTR), "ltr");
+    ASSERT_STR_EQ(ci18n_direction_name(CI18N_DIR_RTL), "rtl");
+
+    /* Anything else is left to right, matching the unknown-language rule. */
+    ASSERT_STR_EQ(ci18n_direction_name((ci18n_direction_t)999), "ltr");
+}
+
+TEST(test_current_direction_follows_the_current_language)
+{
+    ci18n_init();
+
+    /* No language set yet. */
+    ASSERT(ci18n_current_direction() == CI18N_DIR_LTR);
+
+    ci18n_set("en", "greeting", "Hello");
+    ci18n_set("ar", "greeting", "مرحبا");
+    ci18n_set("he", "greeting", "שלום");
+
+    ci18n_set_current("en");
+    ASSERT(ci18n_current_direction() == CI18N_DIR_LTR);
+    ASSERT_STR_EQ(ci18n_direction_name(ci18n_current_direction()), "ltr");
+
+    ci18n_set_current("ar");
+    ASSERT(ci18n_current_direction() == CI18N_DIR_RTL);
+    ASSERT_STR_EQ(ci18n_direction_name(ci18n_current_direction()), "rtl");
+
+    ci18n_set_current("he");
+    ASSERT(ci18n_current_direction() == CI18N_DIR_RTL);
+
+    ci18n_free();
+
+    /* After teardown there is no current language, so left to right again. */
+    ASSERT(ci18n_current_direction() == CI18N_DIR_LTR);
+}
+
+TEST(test_current_direction_in_a_catalogue)
+{
+    ci18n_t *catalog = ci18n_create();
+
+    ASSERT(catalog != NULL);
+    ASSERT(ci18n_current_direction_in(catalog) == CI18N_DIR_LTR);
+
+    ci18n_set_in(catalog, "fa", "greeting", "سلام");
+    ci18n_set_current_in(catalog, "fa");
+    ASSERT(ci18n_current_direction_in(catalog) == CI18N_DIR_RTL);
+
+    /* The default catalogue is untouched by any of that. */
+    ci18n_init();
+    ASSERT(ci18n_current_direction() == CI18N_DIR_LTR);
+    ci18n_free();
+
+    ci18n_destroy(catalog);
+}
+
 TEST(test_plural_lookup_russian)
 {
     ci18n_init();
@@ -2323,6 +2486,16 @@ int main(void)
     RUN_TEST(test_plural_category_other_families);
     RUN_TEST(test_plural_negative_counts);
     RUN_TEST(test_plural_category_names);
+    RUN_TEST(test_plural_category_ignores_case);
+
+    RUN_TEST(test_direction_right_to_left_languages);
+    RUN_TEST(test_direction_left_to_right_languages);
+    RUN_TEST(test_direction_script_subtag_wins);
+    RUN_TEST(test_direction_reads_only_real_script_subtags);
+    RUN_TEST(test_direction_ignores_case);
+    RUN_TEST(test_direction_names);
+    RUN_TEST(test_current_direction_follows_the_current_language);
+    RUN_TEST(test_current_direction_in_a_catalogue);
     RUN_TEST(test_plural_lookup_russian);
     RUN_TEST(test_plural_falls_back_through_other_then_plain);
     RUN_TEST(test_plural_guards);

@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.6.2
+ * ci18n.h - v2.7.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -14,6 +14,7 @@
  *   - CLDR plural rules, so Russian and Arabic work, not just English
  *   - Locale detection with a fallback chain: ru-RU to ru
  *   - Named interpolation, so translations decide where values go
+ *   - Text direction, so an Arabic or Hebrew interface lays out correctly
  *
  * USAGE:
  *   #define CI18N_IMPLEMENTATION before including this header in ONE source file
@@ -55,9 +56,9 @@ Second line.
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 6
-#define CI18N_VERSION_PATCH 2
-#define CI18N_VERSION_STRING "2.6.2"
+#define CI18N_VERSION_MINOR 7
+#define CI18N_VERSION_PATCH 0
+#define CI18N_VERSION_STRING "2.7.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -675,6 +676,79 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
     CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count);
 
     /* ============================================================================
+     * Text direction
+     * ============================================================================
+     *
+     * Arabic, Hebrew, Persian and a few dozen other languages are written
+     * right to left, and an interface has to know which way round to put
+     * things. The direction is a property of the language, so the library can
+     * answer it, while the layout itself is yours to do.
+     *
+     * The name is the one HTML and CSS use, so it drops straight in:
+     *
+     *   printf("<html dir=\"%s\">", ci18n_direction_name(ci18n_current_direction()));
+     *
+     * This is direction only, not bidirectional text. Mixing an English
+     * product name into an Arabic sentence correctly needs the Unicode
+     * bidirectional algorithm, which is not here. See "What this does not do"
+     * in the README.
+     * ============================================================================ */
+
+    /*
+     * Which way a language is written.
+     *
+     * The values match the CSS `direction` property and the HTML `dir`
+     * attribute, and CI18N_DIR_LTR is zero so a zeroed struct means left to
+     * right.
+     */
+    typedef enum ci18n_direction
+    {
+        CI18N_DIR_LTR = 0,
+        CI18N_DIR_RTL
+    } ci18n_direction_t;
+
+    /*
+     * The direction of a language code.
+     *
+     * A script subtag decides on its own, because direction is a property of
+     * the script rather than the language: "az-Arab" is right to left even
+     * though "az" is not, and romanized "ar-Latn" is left to right even
+     * though Arabic is not.
+     *
+     * Without a script subtag the primary subtag is looked up in a table of
+     * the languages whose default script is right to left, so "ar", "ar-EG"
+     * and "ar_EG.UTF-8" all resolve the same way. Matching ignores case, as
+     * BCP 47 says it should.
+     *
+     * An unknown language is left to right. That is the commoner answer, and
+     * the safer one: a left-to-right interface shown right to left is broken
+     * in a way nobody misses, while the reverse merely looks untranslated.
+     *
+     * Returns: CI18N_DIR_RTL or CI18N_DIR_LTR, and CI18N_DIR_LTR for NULL
+     */
+    CI18N_DEF ci18n_direction_t ci18n_direction(const char *language_code);
+
+    /*
+     * The direction's name, "ltr" or "rtl".
+     *
+     * These are the values HTML's dir attribute and CSS's direction property
+     * take, which is what this is for.
+     *
+     * Returns: a static string, never NULL
+     */
+    CI18N_DEF const char *ci18n_direction_name(ci18n_direction_t direction);
+
+    /*
+     * The direction of the current language.
+     *
+     * Shorthand for ci18n_direction(ci18n_get_current()), which is what you
+     * want almost every time. Left to right when no language is set.
+     *
+     * Returns: CI18N_DIR_RTL or CI18N_DIR_LTR
+     */
+    CI18N_DEF ci18n_direction_t ci18n_current_direction(void);
+
+    /* ============================================================================
      * Interpolation
      * ============================================================================
      *
@@ -843,6 +917,7 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
     CI18N_DEF size_t ci18n_count_in(ci18n_t *catalog, const char *language_code);
     CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count);
+    CI18N_DEF ci18n_direction_t ci18n_current_direction_in(ci18n_t *catalog);
 
     /* Diagnostics for a specific catalogue. In the shared threading mode the
      * plain versions are per-thread, which is what a caller wants; these
@@ -2997,6 +3072,86 @@ static size_t ci18n_primary_subtag_len(const char *code)
     return i;
 }
 
+/*
+ * ASCII only, on purpose. The ctype functions depend on the C locale, which
+ * the host program owns and may have changed, and they are undefined for a
+ * negative char. Language tags are ASCII by definition, so this is enough.
+ */
+static char ci18n_ascii_lower(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+static bool ci18n_ascii_alpha(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+/*
+ * Match a NUL-terminated tag against the first `len` bytes of a locale
+ * string, ignoring case. BCP 47 subtags are case-insensitive, so "ru", "RU"
+ * and "Ru" are one language, and "arab" is the "Arab" script.
+ */
+static bool ci18n_subtag_eq(const char *tag, const char *code, size_t len)
+{
+    size_t i;
+
+    if (strlen(tag) != len)
+    {
+        return false;
+    }
+
+    for (i = 0; i < len; i++)
+    {
+        if (ci18n_ascii_lower(tag[i]) != ci18n_ascii_lower(code[i]))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/*
+ * The script subtag, if the code has one.
+ *
+ * It is the second subtag, and only when that is exactly four letters:
+ * "az-Arab" has one, "az-AZ" has a region instead, and "de-1996" a variant.
+ * Returns NULL when there is none, leaving *out_len untouched.
+ */
+static const char *ci18n_script_subtag(const char *code, size_t *out_len)
+{
+    size_t start = ci18n_primary_subtag_len(code);
+    size_t n = 0;
+
+    if (code[start] != '-' && code[start] != '_')
+    {
+        return NULL;
+    }
+    start++;
+
+    while (ci18n_ascii_alpha(code[start + n]))
+    {
+        n++;
+    }
+
+    if (n != 4)
+    {
+        return NULL;
+    }
+
+    /* Four letters, and then the subtag has to actually end: "Arabic" is not
+     * the "Arab" script. */
+    if (code[start + n] != '\0' && code[start + n] != '-' &&
+        code[start + n] != '_' && code[start + n] != '.')
+    {
+        return NULL;
+    }
+
+    *out_len = n;
+    return code + start;
+}
+
 static ci18n_plural_family_t ci18n_plural_family(const char *language_code)
 {
     size_t len;
@@ -3013,7 +3168,7 @@ static ci18n_plural_family_t ci18n_plural_family(const char *language_code)
     {
         const char *candidate = ci18n_plural_rules[i].language;
 
-        if (strlen(candidate) == len && strncmp(candidate, language_code, len) == 0)
+        if (ci18n_subtag_eq(candidate, language_code, len))
         {
             return ci18n_plural_rules[i].family;
         }
@@ -3198,6 +3353,131 @@ CI18N_DEF const char *ci18n_plural_category_name(ci18n_plural_category_t categor
     }
 
     return "other";
+}
+
+
+/*
+ * The right-to-left scripts, as ISO 15924 codes.
+ *
+ * Living scripts only. The historic ones (Phoenician, Avestan, Old Turkic and
+ * a few dozen more) are also right to left, but a translation file in them is
+ * not a case worth carrying a table for.
+ */
+static const char *const ci18n_rtl_scripts[] = {
+    "Arab", /* Arabic */
+    "Hebr", /* Hebrew */
+    "Syrc", /* Syriac */
+    "Thaa", /* Thaana, used for Divehi */
+    "Nkoo", /* N'Ko */
+    "Adlm", /* Adlam, used for Fula */
+    "Mand", /* Mandaic */
+    "Samr", /* Samaritan */
+    "Rohg", /* Hanifi Rohingya */
+    "Yezi"  /* Yezidi */
+};
+
+/*
+ * Languages whose default script is right to left, by primary subtag.
+ *
+ * Only languages that are written right to left unless told otherwise belong
+ * here. Kurdish is the instructive omission: "ku" is Latin script and so left
+ * to right, while Sorani is its own code, "ckb", and is right to left. Same
+ * story for "az" and "pa", which are left to right until a script subtag says
+ * "az-Arab" or "pa-Arab".
+ */
+static const char *const ci18n_rtl_languages[] = {
+    /* Arabic script. */
+    "ar",  /* Arabic */
+    "fa",  /* Persian */
+    "prs", /* Dari */
+    "ur",  /* Urdu */
+    "ps",  /* Pashto */
+    "ckb", /* Central Kurdish, Sorani */
+    "sd",  /* Sindhi */
+    "ug",  /* Uyghur */
+    "ks",  /* Kashmiri */
+    "mzn", /* Mazanderani */
+    "glk", /* Gilaki */
+    "lrc", /* Northern Luri */
+
+    /* Hebrew script. */
+    "he", /* Hebrew */
+    "iw", /* Hebrew, the pre-1989 code, still seen in the wild */
+    "yi", /* Yiddish */
+    "ji", /* Yiddish, likewise */
+
+    /* Aramaic and its descendants. */
+    "arc", /* Imperial Aramaic */
+    "syr", /* Syriac */
+    "sam", /* Samaritan Aramaic */
+
+    /* Elsewhere. */
+    "dv", /* Divehi, Thaana script */
+    "nqo" /* N'Ko */
+};
+
+CI18N_DEF ci18n_direction_t ci18n_direction(const char *language_code)
+{
+    const char *script;
+    size_t script_len = 0;
+    size_t len;
+    size_t i;
+
+    if (!language_code)
+    {
+        return CI18N_DIR_LTR;
+    }
+
+    /* A script subtag settles it by itself: direction belongs to the script,
+     * and an explicit script overrides whatever the language usually uses. */
+    script = ci18n_script_subtag(language_code, &script_len);
+    if (script)
+    {
+        for (i = 0; i < sizeof(ci18n_rtl_scripts) / sizeof(ci18n_rtl_scripts[0]); i++)
+        {
+            if (ci18n_subtag_eq(ci18n_rtl_scripts[i], script, script_len))
+            {
+                return CI18N_DIR_RTL;
+            }
+        }
+
+        return CI18N_DIR_LTR;
+    }
+
+    len = ci18n_primary_subtag_len(language_code);
+
+    for (i = 0; i < sizeof(ci18n_rtl_languages) / sizeof(ci18n_rtl_languages[0]); i++)
+    {
+        if (ci18n_subtag_eq(ci18n_rtl_languages[i], language_code, len))
+        {
+            return CI18N_DIR_RTL;
+        }
+    }
+
+    return CI18N_DIR_LTR;
+}
+
+CI18N_DEF const char *ci18n_direction_name(ci18n_direction_t direction)
+{
+    return (direction == CI18N_DIR_RTL) ? "rtl" : "ltr";
+}
+
+CI18N_DEF ci18n_direction_t ci18n_current_direction_in(ci18n_t *catalog)
+{
+    ci18n_direction_t result;
+
+    CI18N_READ_LOCK(catalog);
+    /* ci18n_direction only reads the code, so computing it under the lock
+     * means the pointer never outlives it. */
+    result = ci18n_direction(ci18n_get_current_impl(catalog));
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF ci18n_direction_t ci18n_current_direction(void)
+{
+    return ci18n_current_direction_in(&ci18n_ctx);
 }
 
 /* Build "key[suffix]", or report that it will not fit. */

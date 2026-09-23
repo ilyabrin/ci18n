@@ -13,6 +13,27 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## 2.7.0 - 2026-09-23
+
+### Added
+
+- Text direction, so an Arabic or Hebrew interface can lay itself out:
+  `ci18n_direction()` for any language code, `ci18n_current_direction()` for
+  the current one, and `ci18n_direction_name()` giving the "ltr" or "rtl" that
+  HTML's `dir` attribute and CSS's `direction` property expect.
+- A script subtag decides direction on its own, because direction belongs to
+  the script rather than the language. So `az-Arab` is right to left although
+  `az` is not, and romanized `ar-Latn` is left to right although Arabic is
+  not.
+
+### Fixed
+
+- Language codes now match case-insensitively, as BCP 47 says they should.
+  `ci18n_plural_category("RU", 2)` used to miss the Russian rule and fall
+  through to the English one, returning `other` where `few` was correct. Any
+  code reaching the library upper-cased, which is common for codes that came
+  from an environment variable, was affected.
+
 ## 2.6.2 - 2026-09-22
 
 ### Fixed
