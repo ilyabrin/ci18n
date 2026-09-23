@@ -1537,6 +1537,41 @@ static const char *ci18n_arena_at(const ci18n_arena_t *arena, uint32_t offset)
 }
 
 /*
+ * Give back the spare room that doubling leaves behind.
+ *
+ * Called once a load is finished, when the language is unlikely to grow
+ * again soon. Without it a loaded language kept up to twice the memory it
+ * needed, 2 to 2.5 times the size of its file; with it, about 1.4 times.
+ * A later ci18n_set() grows by doubling again, as before.
+ *
+ * A failed shrink is harmless: realloc() leaves the block as it was, and
+ * the language simply keeps its spare room.
+ */
+static void ci18n_language_shrink(ci18n_language_t *lang)
+{
+    if (lang->strings.used > 0 && lang->strings.used < lang->strings.capacity)
+    {
+        char *data = (char *)realloc(lang->strings.data, lang->strings.used);
+        if (data)
+        {
+            lang->strings.data = data;
+            lang->strings.capacity = lang->strings.used;
+        }
+    }
+
+    if (lang->count > 0 && lang->count < lang->capacity)
+    {
+        ci18n_entry_t *entries =
+            (ci18n_entry_t *)realloc(lang->entries, lang->count * sizeof(ci18n_entry_t));
+        if (entries)
+        {
+            lang->entries = entries;
+            lang->capacity = lang->count;
+        }
+    }
+}
+
+/*
  * Decode one escape sequence.
  *
  * `text` points at the character after the backslash. Returns the byte to
@@ -2354,6 +2389,7 @@ static bool ci18n_load_language_impl(ci18n_t *ctx, const char *language_code, co
     }
 
     fclose(file);
+    ci18n_language_shrink(lang);
     return ci18n_finish_load(ctx);
 }
 CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepath)
@@ -2442,6 +2478,7 @@ static bool ci18n_load_from_buffer_impl(ci18n_t *ctx, const char *language_code,
         ci18n_record_line(ctx, ci18n_parse_line(ctx, lang, line), line_number);
     }
 
+    ci18n_language_shrink(lang);
     return ci18n_finish_load(ctx);
 }
 CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length)
@@ -4149,6 +4186,33 @@ static bool ci18n_subtag_eq(const char *tag, const char *code, size_t len)
 }
 
 /*
+ * The primary subtag folded to lower case, when it is two letters long.
+ *
+ * Every language in the rule tables has a two-letter code, so this lets the
+ * lookups compare two bytes per row instead of measuring and folding each
+ * row again. That made ci18n_plural_category() six times faster.
+ * Returns false for any other length, and callers then take the general
+ * path, so a three-letter code added to a table later is still found.
+ */
+static bool ci18n_primary_pair(const char *code, char *first, char *second)
+{
+    if (ci18n_primary_subtag_len(code) != 2)
+    {
+        return false;
+    }
+
+    *first = ci18n_ascii_lower(code[0]);
+    *second = ci18n_ascii_lower(code[1]);
+    return true;
+}
+
+/* True when a lower-case table tag is exactly the two letters given. */
+static bool ci18n_tag_is_pair(const char *tag, char first, char second)
+{
+    return tag[0] == first && tag[1] == second && tag[2] == '\0';
+}
+
+/*
  * The script subtag, if the code has one.
  *
  * It is the second subtag, and only when that is exactly four letters:
@@ -4192,9 +4256,22 @@ static ci18n_plural_family_t ci18n_plural_family(const char *language_code)
 {
     size_t len;
     size_t i;
+    char first, second;
 
     if (!language_code)
     {
+        return CI18N_PF_ONE_OTHER;
+    }
+
+    if (ci18n_primary_pair(language_code, &first, &second))
+    {
+        for (i = 0; i < sizeof(ci18n_plural_rules) / sizeof(ci18n_plural_rules[0]); i++)
+        {
+            if (ci18n_tag_is_pair(ci18n_plural_rules[i].language, first, second))
+            {
+                return ci18n_plural_rules[i].family;
+            }
+        }
         return CI18N_PF_ONE_OTHER;
     }
 
@@ -4454,9 +4531,22 @@ static ci18n_ordinal_family_t ci18n_ordinal_family(const char *language_code)
 {
     size_t len;
     size_t i;
+    char first, second;
 
     if (!language_code)
     {
+        return CI18N_OF_OTHER_ONLY;
+    }
+
+    if (ci18n_primary_pair(language_code, &first, &second))
+    {
+        for (i = 0; i < sizeof(ci18n_ordinal_rules) / sizeof(ci18n_ordinal_rules[0]); i++)
+        {
+            if (ci18n_tag_is_pair(ci18n_ordinal_rules[i].language, first, second))
+            {
+                return ci18n_ordinal_rules[i].family;
+            }
+        }
         return CI18N_OF_OTHER_ONLY;
     }
 

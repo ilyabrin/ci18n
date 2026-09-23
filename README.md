@@ -93,8 +93,8 @@ different claim.
 - ✅ Thread-local context (optional)
 - ✅ UTF-8 aware: strict validation, and truncation that keeps characters whole
 
-Small enough to mean it. Three translation files of eight keys each cost
-1600 bytes of heap, and a lookup among a thousand keys takes about 75 ns.
+Small enough to mean it. Three translation files of about ten keys each cost
+1600 bytes of heap, and a lookup among a thousand keys takes about 25 ns.
 Nothing is allocated until you store something.
 
 ## Quick Start
@@ -799,19 +799,19 @@ run it.
 | Operation | Time |
 | --- | ---: |
 | `ci18n_get`, key found | 24 ns |
-| `ci18n_get`, found in the fallback language | 34 ns |
-| `ci18n_get`, key missing | 37 ns |
-| `ci18n_format`, two placeholders | 92 ns |
-| `ci18n_format_plural` | 166 ns |
-| `ci18n_format`, value through a formatter | 167 ns |
-| Load 1 000 keys | 0.14 ms |
-| Load 10 000 keys | 1.4 ms |
+| `ci18n_get`, found in the fallback language | 38 ns |
+| `ci18n_get`, key missing | 41 ns |
+| `ci18n_format_plural` | 91 ns |
+| `ci18n_format`, two placeholders | 104 ns |
+| `ci18n_format`, value through a formatter | 170 ns |
+| Load 1 000 keys | 0.17 ms |
+| Load 10 000 keys | 1.5 ms |
 
 For reference, glibc's `gettext` on the same keys and machine takes 133 ns
 for a found key and 679 ns for a missing one (`make bench-gettext`).
 
-**Size.** The implementation adds about 24 KB of code at `-O2`, 18 KB at
-`-Os`, and no static data. The header itself is 160 KB of source, most of it
+**Size.** The implementation adds 25 to 28 KB of code at `-O2` and 18 to
+19 KB at `-Os`, depending on the platform, plus under 2 KB of rule tables. The header itself is 160 KB of source, most of it
 comments, and is compiled in one file only.
 
 **Memory.**
@@ -821,10 +821,11 @@ comments, and is compiled in one file only.
 | A catalogue, empty | 3.5 KB, no heap |
 | The default catalogue | 3.5 KB of static storage |
 | `CI18N_THREAD_LOCAL_CONTEXT` | 3.5 KB per thread that calls `ci18n_init()` |
-| Loaded translations | 2 to 2.5 times the file size |
+| Loaded translations | about 1.4 times the file size |
 
-A 1 000-key language from a 66 KB file takes 156 KB of heap, a 10 000-key
-one from 664 KB takes 1.3 MB.
+A 1 000-key language from a 66 KB file takes 94 KB of heap, a 10 000-key
+one from 664 KB takes 0.9 MB. A load gives back the spare room its buffers
+grew into, which costs one copy and makes loading about 20% slower.
 
 ## Installing
 

@@ -1252,6 +1252,40 @@ TEST(test_plural_category_ignores_case)
     ASSERT(ci18n_plural_category("JA", 1) == CI18N_PLURAL_OTHER);
 }
 
+TEST(test_load_leaves_no_spare_room)
+{
+    /* Enough entries that doubling has overshot, whatever the start size. */
+    const char text[] =
+        "a=1\nb=2\nc=3\nd=4\ne=5\nf=6\ng=7\nh=8\ni=9\nj=10\nk=11\nl=12\nm=13\n";
+    ci18n_t *cat = ci18n_create();
+    const ci18n_language_t *lang;
+
+    ASSERT(cat != NULL);
+    ASSERT(ci18n_load_from_buffer_in(cat, "en", text, sizeof(text) - 1));
+    lang = &cat->languages[0];
+    ASSERT(lang->strings.capacity == lang->strings.used);
+    ASSERT(lang->capacity == lang->count);
+
+    /* Growing again after the shrink still works, and nothing moved. */
+    ASSERT(ci18n_set_in(cat, "en", "n", "14"));
+    ASSERT(ci18n_set_current_in(cat, "en"));
+    ASSERT_STR_EQ(ci18n_get_in(cat, "a"), "1");
+    ASSERT_STR_EQ(ci18n_get_in(cat, "m"), "13");
+    ASSERT_STR_EQ(ci18n_get_in(cat, "n"), "14");
+    ci18n_destroy(cat);
+}
+
+TEST(test_rules_match_whole_subtag)
+{
+    /* "ruq" is Megleno-Romanian, not Russian: a lookup that compared only
+     * the first two letters would give it the Russian "few". */
+    ASSERT(ci18n_plural_category("ruq", 2) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("ruq-GR", 2) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("r", 2) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category("enm", 2) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category("EN", 2) == CI18N_PLURAL_TWO);
+}
+
 TEST(test_direction_right_to_left_languages)
 {
     ASSERT(ci18n_direction("ar") == CI18N_DIR_RTL);
@@ -3512,6 +3546,8 @@ int main(void)
     RUN_TEST(test_plural_negative_counts);
     RUN_TEST(test_plural_category_names);
     RUN_TEST(test_plural_category_ignores_case);
+    RUN_TEST(test_rules_match_whole_subtag);
+    RUN_TEST(test_load_leaves_no_spare_room);
     RUN_TEST(test_rules_match_cldr_samples);
     RUN_TEST(test_plural_fixes_found_by_cldr);
 

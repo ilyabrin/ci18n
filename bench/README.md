@@ -43,8 +43,9 @@ make bench-gettext
   run, not numbers from different machines.
 - **CI builds the benchmarks but never times them.** Shared runners are too
   noisy for timing, and building everywhere keeps the code compiling.
-- **Memory is roughly 2 to 2.5 times the size of the catalogue file.** Arenas
-  and entry arrays grow by doubling, so up to half of each can be spare room.
+- **Memory is about 1.4 times the size of the catalogue file.** Buffers grow
+  by doubling while a file loads, and the loader gives the spare room back at
+  the end. The rest is the entry array and the hash buckets.
 - **gettext pays for locale checks on every call.** It reads the environment
   and the current locale each time, which is the price its callers pay, so the
   comparison is fair to what an application sees. gettext also maps the `.mo`

@@ -23,6 +23,17 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
   builds `ci18n_bench` too. The READMEs now carry the numbers, along with
   code size and memory use.
 
+### Changed
+
+- A loaded language takes about 1.4 times the size of its file in memory,
+  down from 2 to 2.5 times: the loaders give back the spare room their
+  buffers grew into. Loading gets about 20% slower for the one copy this
+  takes. A later `ci18n_set()` grows the buffers by doubling, as before.
+- `ci18n_plural_category()` and `ci18n_ordinal_category()` are about six
+  times faster, 90 ns down to 15 ns, and `ci18n_format_plural()` about twice
+  as fast. The rule tables were searched with a length check and case
+  folding on every row; the code is now folded once.
+
 ### Documentation
 
 - The shared threading mode does not scale reads across cores: every reader
