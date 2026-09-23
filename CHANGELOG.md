@@ -13,7 +13,7 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
-## Unreleased
+## 2.12.0 - 2026-09-23
 
 ### Added
 
