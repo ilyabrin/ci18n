@@ -36,7 +36,35 @@
 #define READERS 4
 #define ITERATIONS 20000
 
-static volatile int stop_writing;
+/*
+ * Tells the writer to stop once the readers are done.
+ *
+ * Behind a mutex rather than volatile. Volatile stops the compiler caching
+ * the value, which is not the problem here: an unsynchronised write on one
+ * thread and read on another is a data race whatever the qualifier says, and
+ * ThreadSanitizer reports it. The flag is read 400 times in a whole run, so
+ * the lock costs nothing worth measuring.
+ */
+static pthread_mutex_t stop_lock = PTHREAD_MUTEX_INITIALIZER;
+static int stop_writing;
+
+static void request_stop(void)
+{
+    pthread_mutex_lock(&stop_lock);
+    stop_writing = 1;
+    pthread_mutex_unlock(&stop_lock);
+}
+
+static int stop_requested(void)
+{
+    int stop;
+
+    pthread_mutex_lock(&stop_lock);
+    stop = stop_writing;
+    pthread_mutex_unlock(&stop_lock);
+
+    return stop;
+}
 static int failures;
 
 static void fail(const char *what)
@@ -105,7 +133,7 @@ static void *writer(void *arg)
 
     (void)arg;
 
-    for (i = 0; i < 400 && !stop_writing; i++)
+    for (i = 0; i < 400 && !stop_requested(); i++)
     {
         const char *first = "greeting=first\nfiles[one]=one file\nfiles[other]=many\n";
         const char *second = "greeting=second\nfiles[one]=1 file\nfiles[other]=lots\n";
@@ -167,7 +195,7 @@ int main(void)
         pthread_join(readers[i], NULL);
     }
 
-    stop_writing = 1;
+    request_stop();
     pthread_join(scribe, NULL);
 
     /* The catalogue has to be intact and usable afterwards. */
