@@ -2528,12 +2528,108 @@ CI18N_DEF void ci18n_free(void)
 }
 
 
+/*
+ * Splits bytes into lines for the parser, whatever size the pieces arrive
+ * in. Both loaders feed it, so a file and the same bytes in a buffer give
+ * the same entries: LF, CRLF and a lone CR all end a line, and a line past
+ * CI18N_MAX_LINE_LENGTH keeps its head and loses its tail.
+ *
+ * The file loader used fgets() once, which differed from the buffer loader
+ * on lone CRs, and which some embedded C libraries get wrong: picolibc, the
+ * default in Zephyr, returns NULL for a last line with no newline and drops
+ * what it read.
+ */
+typedef struct ci18n_lines
+{
+    char line[CI18N_MAX_LINE_LENGTH];
+    size_t pos;
+    size_t number;
+    bool cut;         /* this line overflowed, the rest of it is dropped */
+    bool after_cr;    /* the previous byte ended a line with CR */
+} ci18n_lines_t;
+
+static void ci18n_lines_emit(ci18n_t *ctx, ci18n_language_t *lang, ci18n_lines_t *st)
+{
+    st->line[st->pos] = '\0';
+    st->number++;
+    ci18n_record_line(ctx, ci18n_parse_line(ctx, lang, st->line), st->number);
+    st->pos = 0;
+    st->cut = false;
+}
+
+static void ci18n_lines_feed(ci18n_t *ctx, ci18n_language_t *lang, ci18n_lines_t *st,
+                             const char *data, size_t length)
+{
+    size_t i;
+
+    for (i = 0; i < length; i++)
+    {
+        char c = data[i];
+
+        /* The LF of a CRLF pair, possibly in the next piece. */
+        if (st->after_cr)
+        {
+            st->after_cr = false;
+            if (c == '\n')
+            {
+                continue;
+            }
+        }
+
+        if (c == '\n' || c == '\r')
+        {
+            ci18n_lines_emit(ctx, lang, st);
+            st->after_cr = (c == '\r');
+        }
+        else if (st->pos < CI18N_MAX_LINE_LENGTH - 1)
+        {
+            st->line[st->pos++] = c;
+        }
+        else if (!st->cut)
+        {
+            CI18N_STATS_SLOT(ctx).lines_truncated++;
+            st->cut = true;
+        }
+    }
+}
+
+/* The last line, when the input does not end with a newline. */
+static void ci18n_lines_finish(ci18n_t *ctx, ci18n_language_t *lang, ci18n_lines_t *st)
+{
+    if (st->pos > 0 || st->cut)
+    {
+        ci18n_lines_emit(ctx, lang, st);
+    }
+}
+
+/*
+ * The Windows CRT marks fopen and getenv deprecated in favour of its _s
+ * variants, and a warning from this header would stop any project built
+ * with warnings as errors. They are silenced around each call rather than by
+ * defining _CRT_SECURE_NO_WARNINGS, which would cover the caller's own code
+ * too. MSVC and clang-cl both define _MSC_VER, but clang-cl ignores MSVC's
+ * warning pragmas and needs its own.
+ */
+#if defined(_MSC_VER) && defined(__clang__)
+#define CI18N_CRT_WARNINGS_OFF                                              \
+    _Pragma("clang diagnostic push")                                        \
+        _Pragma("clang diagnostic ignored \"-Wdeprecated-declarations\"")
+#define CI18N_CRT_WARNINGS_ON _Pragma("clang diagnostic pop")
+#elif defined(_MSC_VER)
+#define CI18N_CRT_WARNINGS_OFF __pragma(warning(push)) __pragma(warning(disable : 4996))
+#define CI18N_CRT_WARNINGS_ON __pragma(warning(pop))
+#else
+#define CI18N_CRT_WARNINGS_OFF
+#define CI18N_CRT_WARNINGS_ON
+#endif
+
 static bool ci18n_load_language_impl(ci18n_t *ctx, const char *language_code, const char *filepath)
 {
     FILE *file;
-    char line[CI18N_MAX_LINE_LENGTH];
+    ci18n_lines_t *lines;
     ci18n_language_t *lang;
-    size_t line_number = 0;
+    char chunk[512];
+    size_t got;
 
     if (!ctx->initialized)
     {
@@ -2550,22 +2646,12 @@ static bool ci18n_load_language_impl(ci18n_t *ctx, const char *language_code, co
         return ci18n_fail(ctx, CI18N_ERR_CODE_TOO_LONG);
     }
 
-    /* MSVC deprecates fopen in favour of fopen_s and warns at /W4, which
-     * would stop this header compiling in any project using /WX. Suppressed
-     * around this one line rather than by defining _CRT_SECURE_NO_WARNINGS:
-     * that macro covers the whole translation unit, so the library would be
-     * silencing warnings about the caller's code as well as its own.
-     *
-     * The warning does not apply here in substance. The return value is
-     * checked, and nothing unbounded is written. */
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    file = fopen(filepath, "r");
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+    /* The Windows CRT deprecates fopen in favour of fopen_s; see
+     * CI18N_CRT_WARNINGS_OFF. The return value is checked, and nothing
+     * unbounded is written. */
+    CI18N_CRT_WARNINGS_OFF
+    file = fopen(filepath, "rb");
+    CI18N_CRT_WARNINGS_ON
 
     if (!file)
     {
@@ -2581,40 +2667,24 @@ static bool ci18n_load_language_impl(ci18n_t *ctx, const char *language_code, co
         return false; /* get_or_create already recorded why */
     }
 
-    ci18n_reset_load_stats(ctx);
-
-    while (fgets(line, sizeof(line), file))
+    /* The line buffer is a few KB, too much for a small device's stack to
+     * take on top of the chunk, so it comes from the heap. */
+    lines = (ci18n_lines_t *)calloc(1, sizeof(*lines));
+    if (!lines)
     {
-        size_t len = strlen(line);
-
-        line_number++;
-
-        /* fgets() stops at the buffer, so a line longer than it would come
-         * back on the next read and be parsed as a line of its own, usually
-         * without a separator, which then looked like a malformed line that
-         * was never in the file. Swallow the tail instead. */
-        if (len == sizeof(line) - 1 && line[len - 1] != '\n' && line[len - 1] != '\r')
-        {
-            int discarded;
-
-            CI18N_STATS_SLOT(ctx).lines_truncated++;
-
-            while ((discarded = fgetc(file)) != EOF && discarded != '\n')
-            {
-                /* nothing: the rest of this line cannot be stored anyway */
-            }
-        }
-
-        /* Strip the line terminator. One loop covers LF, CRLF and a lone CR,
-         * so a file authored on any platform parses the same way. */
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-        {
-            line[--len] = '\0';
-        }
-
-        ci18n_record_line(ctx, ci18n_parse_line(ctx, lang, line), line_number);
+        fclose(file);
+        return ci18n_fail(ctx, CI18N_ERR_OUT_OF_MEMORY);
     }
 
+    ci18n_reset_load_stats(ctx);
+
+    while ((got = fread(chunk, 1, sizeof(chunk), file)) > 0)
+    {
+        ci18n_lines_feed(ctx, lang, lines, chunk, got);
+    }
+    ci18n_lines_finish(ctx, lang, lines);
+
+    free(lines);
     fclose(file);
     ci18n_language_shrink(lang);
     return ci18n_finish_load(ctx);
@@ -2634,11 +2704,7 @@ CI18N_DEF bool ci18n_load_language(const char *language_code, const char *filepa
 static bool ci18n_load_from_buffer_impl(ci18n_t *ctx, const char *language_code, const char *buffer, size_t length)
 {
     ci18n_language_t *lang;
-    char line[CI18N_MAX_LINE_LENGTH];
-    size_t pos = 0;
-    size_t line_pos = 0;
-    size_t line_number = 0;
-    bool line_cut = false;
+    ci18n_lines_t *lines;
 
     if (!ctx->initialized)
     {
@@ -2661,49 +2727,16 @@ static bool ci18n_load_from_buffer_impl(ci18n_t *ctx, const char *language_code,
         return false; /* get_or_create already recorded why */
     }
 
+    lines = (ci18n_lines_t *)calloc(1, sizeof(*lines));
+    if (!lines)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_OUT_OF_MEMORY);
+    }
+
     ci18n_reset_load_stats(ctx);
-
-    while (pos < length)
-    {
-        char c = buffer[pos++];
-
-        if (c == '\n' || c == '\r')
-        {
-            line[line_pos] = '\0';
-            line_number++;
-            ci18n_record_line(ctx, ci18n_parse_line(ctx, lang, line), line_number);
-            line_pos = 0;
-            line_cut = false;
-
-            /* Skip \r\n pairs */
-            if (c == '\r' && pos < length && buffer[pos] == '\n')
-            {
-                pos++;
-            }
-        }
-        else
-        {
-            if (line_pos < CI18N_MAX_LINE_LENGTH - 1)
-            {
-                line[line_pos++] = c;
-            }
-            else if (!line_cut)
-            {
-                /* Everything past the buffer is dropped, unlike the file
-                 * loader where the tail resurfaces as another line. */
-                CI18N_STATS_SLOT(ctx).lines_truncated++;
-                line_cut = true;
-            }
-        }
-    }
-
-    /* Process last line if no newline at end */
-    if (line_pos > 0)
-    {
-        line[line_pos] = '\0';
-        line_number++;
-        ci18n_record_line(ctx, ci18n_parse_line(ctx, lang, line), line_number);
-    }
+    ci18n_lines_feed(ctx, lang, lines, buffer, length);
+    ci18n_lines_finish(ctx, lang, lines);
+    free(lines);
 
     ci18n_language_shrink(lang);
     return ci18n_finish_load(ctx);
@@ -3066,14 +3099,9 @@ static bool ci18n_load_mo_impl(ci18n_t *ctx, const char *language_code, const ch
     }
 
     /* See ci18n_load_language_impl for why the warning is silenced here. */
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
+    CI18N_CRT_WARNINGS_OFF
     file = fopen(filepath, "rb");
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+    CI18N_CRT_WARNINGS_ON
 
     if (!file)
     {
@@ -6229,7 +6257,11 @@ CI18N_DEF size_t ci18n_detect_locale(char *out, size_t capacity)
      * language for one program will have set. */
     for (i = 0; i < sizeof(variables) / sizeof(variables[0]); i++)
     {
-        const char *value = getenv(variables[i]);
+        const char *value;
+
+        CI18N_CRT_WARNINGS_OFF
+        value = getenv(variables[i]);
+        CI18N_CRT_WARNINGS_ON
 
         if (value && value[0] != '\0')
         {

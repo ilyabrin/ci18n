@@ -8,6 +8,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* The fixtures use fopen, which the Windows CRT calls deprecated. */
+#define _CRT_SECURE_NO_WARNINGS
 #define CI18N_IMPLEMENTATION
 #include "ci18n.h"
 #include <stdio.h>
@@ -652,12 +654,11 @@ TEST(test_load_language_lone_cr)
 {
     ci18n_init();
 
-    /* Classic Mac terminators. fgets() does not split on CR, so the whole
-     * file arrives as one line and only the first pair survives. Asserted
-     * as the behaviour it is, not as the behaviour one might want. */
+    /* Classic Mac terminators. A lone CR ends a line, in a file as in a
+     * buffer; with fgets() the whole file used to arrive as one line. */
     ASSERT(write_text(TEMP_FILE, "a=one\rb=two\r"));
     ASSERT(ci18n_load_language("en", TEMP_FILE) == true);
-    ASSERT(ci18n_count("en") == 1);
+    ASSERT(ci18n_count("en") == 2);
 
     remove(TEMP_FILE);
     ci18n_free();
