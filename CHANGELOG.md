@@ -17,6 +17,15 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ### Added
 
+- `ci18n_load_mo()` and `ci18n_load_mo_from_buffer()`, with `_in`
+  variants, load compiled gettext catalogues directly: no libintl, no
+  conversion step. Contexts become key prefixes and plural forms land on
+  CLDR categories, the same way `tools/po2ci18n.py` maps them. Both byte
+  orders are read and every offset is checked against the size. About
+  2.5 KB of code; `CI18N_NO_MO` leaves it out. `make test-mo` checks the
+  loader against the converter on files compiled by `msgfmt`, and the
+  fuzzer now runs it too.
+
 - Bidi isolation. `ci18n_set_bidi_isolation(true)` wraps every value
   `ci18n_format` and its relatives fill in with FSI and PDI, so an English
   name in an Arabic sentence, or a Hebrew one in English, no longer

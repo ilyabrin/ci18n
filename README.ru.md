@@ -100,6 +100,24 @@
 
 ## Быстрый старт
 
+Самой маленькой рабочей программе нужны один заголовок и по файлу на язык:
+
+```c
+#define CI18N_IMPLEMENTATION
+#include "ci18n.h"
+
+int main(void)
+{
+    ci18n_init();
+    ci18n_load_language("ru", "ru.txt");   /* greeting=Привет */
+    ci18n_set_current("ru");
+    puts(ci18n_get_or_key("greeting"));
+    ci18n_free();
+}
+```
+
+Всё остальное ниже необязательно и ничего не стоит, пока вы это не вызываете.
+
 ### 1. Подключение
 
 В **одном** .c файле вашего проекта:
@@ -177,7 +195,24 @@ error=Произошла ошибка
 
 ## Переход с gettext
 
-`tools/po2ci18n.py` превращает каталог `.po` в файл перевода ci18n:
+Загружайте `.mo`, которые у вас уже собираются, без libintl и без
+конвертации:
+
+```c
+ci18n_load_mo("ru", "locale/ru/LC_MESSAGES/app.mo");
+ci18n_set_current("ru");
+ci18n_get("Hello, world");     /* ключи это msgid */
+ci18n_plural("%d file", n);    /* msgid_plural тоже работает */
+```
+
+`msgctxt` становится префиксом, `menu.Open`, а формы плюрала раскладываются
+по категориям CLDR по `nplurals` из заголовка. Читаются оба порядка байт, и
+каждое смещение проверяется до использования, так что битый файл отвергается,
+а не читается за границей. `ci18n_load_mo_from_buffer` берёт файл, уже
+лежащий в памяти. Загрузчик занимает около 2,5 КБ кода; определите
+`CI18N_NO_MO`, чтобы его не было.
+
+Чтобы уйти с gettext совсем, `tools/po2ci18n.py` превращает каталог `.po` в файл перевода ci18n:
 
 ```bash
 tools/po2ci18n.py ru.po -o translations/ru.txt
@@ -198,7 +233,9 @@ tools/po2ci18n.py --keys=slug ru.po -o translations/ru.txt
 это выражение на вашей машине, а не на устройстве.
 
 `make test-po` прогоняет конвертер по образцовому каталогу и загружает результат
-обратно, чтобы он не сломался незамеченным.
+обратно, чтобы он не сломался незамеченным. `make test-mo` собирает тот же
+образец через `msgfmt` в обоих порядках байт и проверяет, что загрузчик `.mo`
+получает ровно то же, что записал конвертер.
 
 ## Экранирование
 
@@ -241,6 +278,7 @@ padded=сохраняет один пробел в конце\
 #define CI18N_MAX_KEYS_PER_LANGUAGE 1024
 #define CI18N_MAX_CODE_LENGTH 32
 #define CI18N_THREAD_LOCAL_CONTEXT  /* по контексту на поток */
+#define CI18N_NO_MO                 /* без загрузчика .mo, около 2,5 КБ */
 #include "ci18n.h"
 ```
 
@@ -802,6 +840,8 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_free()`                           | Освобождение ресурсов    |
 | `ci18n_load_language(code, path)`        | Загрузка из файла        |
 | `ci18n_load_from_buffer(code, buf, len)` | Загрузка из буфера       |
+| `ci18n_load_mo(code, path)`              | Загрузка файла gettext .mo |
+| `ci18n_load_mo_from_buffer(code, p, len)` | Байты .mo из памяти     |
 | `ci18n_set_current(code)`                | Установить текущий язык  |
 | `ci18n_set_fallback(code)`               | Установить fallback язык |
 | `ci18n_get(key)`                         | Получить перевод         |

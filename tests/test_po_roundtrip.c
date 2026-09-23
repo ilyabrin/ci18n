@@ -4,7 +4,13 @@
  *   make test-po
  *
  * Converts tests/po/sample.po, loads the result, and checks the strings came
- * back intact. The converter is a script outside the library, so without this
+ * back intact.
+ *
+ *   make test-mo
+ *
+ * Does the same, then loads each .mo file named after the first argument,
+ * compiled by msgfmt from the same .po, and checks that each holds exactly
+ * the entries the converter wrote. Two routes from one source must agree. The converter is a script outside the library, so without this
  * nothing would notice it rotting. It earned its place immediately: it caught
  * a parser bug that 89 unit tests and the fuzzer had both missed, where a key
  * containing a backslash switched escape decoding off for its own value.
@@ -35,6 +41,33 @@ static void expect(const char *key, const char *want)
     }
 
     printf("ok  [%s] -> [%s]\n", key, got);
+}
+
+typedef struct
+{
+    ci18n_t *other;
+    int differences;
+} compare_t;
+
+static bool compare_entry(const char *key, const char *value, void *user_data)
+{
+    compare_t *cmp = (compare_t *)user_data;
+    char got[1024];
+
+    if (!ci18n_has_in(cmp->other, key))
+    {
+        printf("MISMATCH .mo lacks [%s]\n", key);
+        cmp->differences++;
+        return true;
+    }
+
+    ci18n_get_copy_in(cmp->other, key, got, sizeof(got));
+    if (strcmp(got, value) != 0)
+    {
+        printf("MISMATCH [%s]\n  converter [%s]\n  .mo       [%s]\n", key, value, got);
+        cmp->differences++;
+    }
+    return true;
 }
 
 int main(int argc, char **argv)
@@ -116,6 +149,43 @@ int main(int argc, char **argv)
     {
         printf("MISMATCH an obsolete entry was emitted\n");
         failures++;
+    }
+
+    /* Each .mo file must hold exactly what the converter wrote. */
+    {
+        int i;
+
+        for (i = 2; i < argc; i++)
+        {
+            ci18n_t *mo = ci18n_create();
+            compare_t cmp;
+
+            if (!mo || !ci18n_load_mo_in(mo, "ru", argv[i]))
+            {
+                printf("MISMATCH cannot load %s\n", argv[i]);
+                failures++;
+                ci18n_destroy(mo);
+                continue;
+            }
+
+            ci18n_set_current_in(mo, "ru");
+            cmp.other = mo;
+            cmp.differences = 0;
+            ci18n_foreach("ru", compare_entry, &cmp);
+            if (ci18n_count_in(mo, "ru") != ci18n_count("ru"))
+            {
+                printf("MISMATCH %s has %u entries, the converter wrote %u\n", argv[i],
+                       (unsigned)ci18n_count_in(mo, "ru"), (unsigned)ci18n_count("ru"));
+                cmp.differences++;
+            }
+            if (cmp.differences == 0)
+            {
+                printf("ok  %s holds the same %u entries\n", argv[i],
+                       (unsigned)ci18n_count("ru"));
+            }
+            failures += cmp.differences;
+            ci18n_destroy(mo);
+        }
     }
 
     ci18n_free();

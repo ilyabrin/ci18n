@@ -99,6 +99,24 @@ Nothing is allocated until you store something.
 
 ## Quick Start
 
+The smallest program that works needs one header and one file per language:
+
+```c
+#define CI18N_IMPLEMENTATION
+#include "ci18n.h"
+
+int main(void)
+{
+    ci18n_init();
+    ci18n_load_language("ru", "ru.txt");   /* greeting=Привет */
+    ci18n_set_current("ru");
+    puts(ci18n_get_or_key("greeting"));
+    ci18n_free();
+}
+```
+
+Everything else below is optional, and costs nothing until you call it.
+
 ### 1. Include
 
 In **one** .c file of your project:
@@ -176,7 +194,22 @@ error=An error occurred
 
 ## Coming from gettext
 
-`tools/po2ci18n.py` converts a `.po` catalogue into a ci18n translation file:
+Load the `.mo` files you already build, no libintl and no conversion step:
+
+```c
+ci18n_load_mo("ru", "locale/ru/LC_MESSAGES/app.mo");
+ci18n_set_current("ru");
+ci18n_get("Hello, world");     /* keys are the msgids */
+ci18n_plural("%d file", n);    /* msgid_plural works too */
+```
+
+A `msgctxt` becomes a prefix, `menu.Open`, and plural forms land on CLDR
+categories by the header's `nplurals`. Both byte orders are read, and every
+offset is checked before use, so a broken file is refused rather than read
+past. `ci18n_load_mo_from_buffer` takes one already in memory. The loader is
+about 2.5 KB of code; define `CI18N_NO_MO` to leave it out.
+
+To leave gettext entirely, `tools/po2ci18n.py` converts a `.po` catalogue into a ci18n translation file:
 
 ```bash
 tools/po2ci18n.py ru.po -o translations/ru.txt
@@ -196,7 +229,9 @@ point is one small header. Converting at build time evaluates that expression
 on your machine rather than on the device.
 
 `make test-po` runs the converter over a sample catalogue and loads the result
-back, so it stays correct.
+back, so it stays correct. `make test-mo` compiles the same sample with
+`msgfmt`, in both byte orders, and checks that the `.mo` loader ends up with
+exactly what the converter wrote.
 
 ## Escape sequences
 
@@ -238,6 +273,7 @@ Define macros before including the header to configure:
 #define CI18N_MAX_KEYS_PER_LANGUAGE 1024
 #define CI18N_MAX_CODE_LENGTH 32
 #define CI18N_THREAD_LOCAL_CONTEXT  /* one context per thread */
+#define CI18N_NO_MO                 /* leave out the .mo loader, about 2.5 KB */
 #include "ci18n.h"
 ```
 
@@ -791,6 +827,8 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_free()`                           | Free resources        |
 | `ci18n_load_language(code, path)`        | Load from file        |
 | `ci18n_load_from_buffer(code, buf, len)` | Load from buffer      |
+| `ci18n_load_mo(code, path)`              | Load a gettext .mo file |
+| `ci18n_load_mo_from_buffer(code, p, len)` | Load .mo bytes from memory |
 | `ci18n_set_current(code)`                | Set current language  |
 | `ci18n_set_fallback(code)`               | Set fallback language |
 | `ci18n_get(key)`                         | Get translation       |

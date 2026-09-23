@@ -2417,6 +2417,149 @@ TEST(test_ordinal_lookup)
 /* A form taken from the fallback language is chosen by the fallback's rules.
  * Found by the server example: Arabic asked for "rank" at 3, has none, and
  * got English "{count}th", because Arabic's one ordinal form is "other". */
+#ifndef CI18N_NO_MO
+/* ------------------------------------------------------------------------
+ * .mo catalogues, built by hand so every field can be bent
+ * ------------------------------------------------------------------------ */
+
+typedef struct
+{
+    const char *orig;
+    size_t orig_len;
+    const char *trans;
+    size_t trans_len;
+} mo_entry_t;
+
+#define MO_STR(s) s, sizeof(s) - 1
+
+static void mo_put_u32(unsigned char *p, uint32_t v, bool big_endian)
+{
+    int i;
+
+    for (i = 0; i < 4; i++)
+    {
+        p[big_endian ? 3 - i : i] = (unsigned char)(v >> (8 * i));
+    }
+}
+
+/* Lays out a catalogue the way msgfmt does and returns its size. */
+static size_t mo_build(unsigned char *out, const mo_entry_t *e, uint32_t n,
+                       bool big_endian)
+{
+    size_t strings = 28 + 16 * (size_t)n;
+    uint32_t i;
+    int pass;
+
+    memset(out, 0, strings);
+    mo_put_u32(out, 0x950412deU, big_endian);
+    mo_put_u32(out + 8, n, big_endian);
+    mo_put_u32(out + 12, 28, big_endian);
+    mo_put_u32(out + 16, 28 + 8 * n, big_endian);
+
+    for (pass = 0; pass < 2; pass++)
+    {
+        for (i = 0; i < n; i++)
+        {
+            const char *text = pass ? e[i].trans : e[i].orig;
+            size_t len = pass ? e[i].trans_len : e[i].orig_len;
+            unsigned char *slot = out + 28 + (pass ? 8 * n : 0) + 8 * i;
+
+            mo_put_u32(slot, (uint32_t)len, big_endian);
+            mo_put_u32(slot + 4, (uint32_t)strings, big_endian);
+            memcpy(out + strings, text, len);
+            out[strings + len] = '\0';
+            strings += len + 1;
+        }
+    }
+    return strings;
+}
+
+static const mo_entry_t MO_SAMPLE[] = {
+    {MO_STR(""), MO_STR("Language: ru\nPlural-Forms: nplurals=3; plural=(n%10==1 ? 0 : 1);\n")},
+    {MO_STR("%d file\0%d files"), MO_STR("%d \xd1\x84\xd0\xb0\xd0\xb9\xd0\xbb\0%d \xd1\x84\xd0\xb0\xd0\xb9\xd0\xbb\xd0\xb0\0%d \xd1\x84\xd0\xb0\xd0\xb9\xd0\xbb\xd0\xbe\xd0\xb2")},
+    {MO_STR("Hello"), MO_STR("\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82")},
+    {MO_STR("menu\4Open"), MO_STR("\xd0\x9e\xd1\x82\xd0\xba\xd1\x80\xd1\x8b\xd1\x82\xd1\x8c")},
+};
+
+TEST(test_load_mo_both_byte_orders)
+{
+    static unsigned char mo[1024];
+    int big;
+
+    for (big = 0; big < 2; big++)
+    {
+        size_t size = mo_build(mo, MO_SAMPLE, 4, big != 0);
+        const ci18n_load_stats_t *st;
+
+        ci18n_init();
+        ASSERT(ci18n_load_mo_from_buffer("ru", mo, size));
+        ASSERT(ci18n_last_error() == CI18N_OK);
+        st = ci18n_last_load_stats();
+        ASSERT(st->lines_read == 4);
+        ASSERT(st->entries_loaded == 3);
+        ASSERT(st->lines_skipped == 1); /* the header */
+        ASSERT(ci18n_count("ru") == 5);
+
+        ci18n_set_current("ru");
+        ASSERT_STR_EQ(ci18n_get("Hello"), "\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82");
+        ASSERT_STR_EQ(ci18n_get("menu.Open"), "\xd0\x9e\xd1\x82\xd0\xba\xd1\x80\xd1\x8b\xd1\x82\xd1\x8c");
+
+        /* nplurals=3 maps 0, 1, 2 onto one, few, many. */
+        ASSERT_STR_EQ(ci18n_plural("%d file", 1), "%d \xd1\x84\xd0\xb0\xd0\xb9\xd0\xbb");
+        ASSERT_STR_EQ(ci18n_plural("%d file", 3), "%d \xd1\x84\xd0\xb0\xd0\xb9\xd0\xbb\xd0\xb0");
+        ASSERT_STR_EQ(ci18n_plural("%d file", 5), "%d \xd1\x84\xd0\xb0\xd0\xb9\xd0\xbb\xd0\xbe\xd0\xb2");
+        ci18n_free();
+    }
+}
+
+TEST(test_load_mo_refuses_what_is_not_one)
+{
+    static unsigned char mo[1024];
+    size_t size = mo_build(mo, MO_SAMPLE, 4, false);
+
+    ci18n_init();
+
+    /* Too short, wrong magic, a newer major revision: refused whole, and
+     * no language is left behind. */
+    ASSERT(!ci18n_load_mo_from_buffer("ru", mo, 20));
+    ASSERT(ci18n_last_error() == CI18N_ERR_PARSE);
+    ASSERT(!ci18n_load_mo_from_buffer("ru", "key=value\n", 10));
+    mo[6] = 1;
+    ASSERT(!ci18n_load_mo_from_buffer("ru", mo, size));
+    mo[6] = 0;
+    ASSERT(ci18n_get_languages(NULL, 0) == 0);
+
+    /* A count whose tables would run past the end. */
+    mo_put_u32(mo + 8, 0x10000000U, false);
+    ASSERT(!ci18n_load_mo_from_buffer("ru", mo, size));
+    mo_put_u32(mo + 8, 4, false);
+
+    /* One string pointing outside the file: that entry alone is dropped,
+     * and counted. Entry 2 is "Hello"; its translation offset is at
+     * 28 + 4*8 + 2*8 + 4. */
+    mo_put_u32(mo + 28 + 32 + 16 + 4, 0xFFFFFFF0U, false);
+    ASSERT(ci18n_load_mo_from_buffer("ru", mo, size));
+    ASSERT(ci18n_last_error() == CI18N_ERR_PARSE);
+    ASSERT(ci18n_last_load_stats()->lines_malformed == 1);
+    ASSERT(ci18n_last_load_stats()->first_malformed_line == 3);
+    ci18n_set_current("ru");
+    ASSERT(ci18n_get("Hello") == NULL);
+    ASSERT(ci18n_get("menu.Open") != NULL);
+
+    /* A length that runs past the end is refused too. Entry 3's
+     * translation length is at 28 + 4*8 + 3*8. */
+    size = mo_build(mo, MO_SAMPLE, 4, false);
+    mo_put_u32(mo + 28 + 32 + 24, (uint32_t)size, false);
+    ASSERT(ci18n_load_mo_from_buffer("xx", mo, size));
+    ASSERT(ci18n_last_load_stats()->lines_malformed == 1);
+
+    ASSERT(!ci18n_load_mo("ru", "no/such/file.mo"));
+    ASSERT(ci18n_last_error() == CI18N_ERR_FILE_NOT_FOUND);
+
+    ci18n_free();
+}
+#endif /* CI18N_NO_MO */
+
 TEST(test_bidi_isolate)
 {
     char out[64];
@@ -3755,6 +3898,10 @@ int main(void)
     RUN_TEST(test_ordinal_lookup);
     RUN_TEST(test_ordinal_lookup_falls_back_like_plurals);
     RUN_TEST(test_forms_from_the_fallback_use_its_rules);
+#ifndef CI18N_NO_MO
+    RUN_TEST(test_load_mo_both_byte_orders);
+    RUN_TEST(test_load_mo_refuses_what_is_not_one);
+#endif
     RUN_TEST(test_bidi_isolate);
     RUN_TEST(test_format_truncation_is_a_prefix);
     RUN_TEST(test_bidi_isolation_in_format);

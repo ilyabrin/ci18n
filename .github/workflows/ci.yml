@@ -138,10 +138,21 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc make python3
+        run: sudo apt-get update && sudo apt-get install -y gcc make python3 gettext
 
       - name: Convert and load back
         run: make test-po
+
+      # The .mo loader reads what msgfmt writes, in both byte orders, and
+      # has to end up with exactly what the converter produced.
+      - name: Load msgfmt output and compare
+        run: make test-mo
+
+      # CI18N_NO_MO strips the loader; the rest must build and pass without it.
+      - name: Build and test without the .mo loader
+        run: |
+          make clean
+          make test EXTRA_CFLAGS="-Werror -DCI18N_NO_MO"
 
   # CI18N_THREAD_LOCAL_CONTEXT is a compile-time branch, so it needs its own
   # build to be covered at all. The deprecated spelling is built too, because

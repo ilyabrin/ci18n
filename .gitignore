@@ -34,6 +34,7 @@ fuzz_replay.exe
 test_po_roundtrip
 test_po_roundtrip.exe
 po_roundtrip.txt
+po_roundtrip_*.mo
 bench_ci18n
 bench_ci18n.exe
 bench_threads

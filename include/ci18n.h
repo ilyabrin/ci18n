@@ -548,6 +548,44 @@ typedef union
      */
     CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length);
 
+#ifndef CI18N_NO_MO
+    /*
+     * Load a compiled gettext catalogue, a .mo file, into a language.
+     *
+     * For a project that already has gettext translations: keep the .po
+     * files and the tools around them, and load what msgfmt produces. No
+     * libintl, no setlocale, no conversion step.
+     *
+     *   ci18n_load_mo("ru", "locale/ru/LC_MESSAGES/app.mo");
+     *   ci18n_get("Hello, world");            // keys are the msgids
+     *
+     * How entries map, the same way tools/po2ci18n.py maps them:
+     *
+     *   msgid "Open"                     key "Open"
+     *   msgctxt "menu" + msgid "Open"    key "menu.Open"
+     *   msgid_plural, msgstr[0..n]       keys "msgid[one]", "msgid[few]", ...
+     *
+     * Plural indexes become CLDR categories by the header's nplurals: 2 is
+     * one, other; 3 is one, few, many; and so on for the shapes gettext
+     * catalogues use. The header entry itself is skipped, and msgfmt has
+     * already dropped fuzzy and untranslated entries.
+     *
+     * Both byte orders are read. Every offset is checked against the size
+     * before use, so a truncated or hostile file is refused, never read past.
+     * In the load stats a "line" is an entry, numbered from 1.
+     *
+     * Define CI18N_NO_MO to leave this out of the build.
+     *
+     * Returns: false if the file cannot be read or is not a .mo file
+     * (CI18N_ERR_PARSE), true otherwise; see ci18n_last_load_stats()
+     */
+    CI18N_DEF bool ci18n_load_mo(const char *language_code, const char *filepath);
+
+    /* The same, from bytes already in memory, such as a catalogue embedded in
+     * the binary. The buffer is only read during the call. */
+    CI18N_DEF bool ci18n_load_mo_from_buffer(const char *language_code, const void *data, size_t length);
+#endif
+
     /*
      * Set the current active language.
      * Returns: true if language exists, false otherwise
@@ -1299,6 +1337,11 @@ typedef union
      * after, on the catalogue given rather than on the default one. */
     CI18N_DEF bool ci18n_load_language_in(ci18n_t *catalog, const char *language_code, const char *filepath);
     CI18N_DEF bool ci18n_load_from_buffer_in(ci18n_t *catalog, const char *language_code, const char *buffer, size_t length);
+#ifndef CI18N_NO_MO
+    CI18N_DEF bool ci18n_load_mo_in(ci18n_t *catalog, const char *language_code, const char *filepath);
+    CI18N_DEF bool ci18n_load_mo_from_buffer_in(ci18n_t *catalog, const char *language_code,
+                                                const void *data, size_t length);
+#endif
     CI18N_DEF bool ci18n_set_current_in(ci18n_t *catalog, const char *language_code);
     CI18N_DEF bool ci18n_set_fallback_in(ci18n_t *catalog, const char *language_code);
     CI18N_DEF bool ci18n_set_current_best_in(ci18n_t *catalog, const char *locale);
@@ -2637,6 +2680,425 @@ CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buf
 
     return result;
 }
+
+#ifndef CI18N_NO_MO
+/* ============================================================================
+ * gettext .mo catalogues
+ * ============================================================================
+ *
+ * The layout, all fields 32-bit in the file's byte order:
+ *
+ *   0   magic 0x950412de       16  offset of the translation table
+ *   4   revision, major 0      20  hash table size, unused here
+ *   8   number of strings      24  hash table offset, unused here
+ *   12  offset of the original table
+ *
+ * Each table holds (length, offset) pairs. A length excludes the NUL that
+ * follows the string. A plural original is "singular\0plural", its
+ * translation the forms joined by NULs, and a context is "ctx\4msgid".
+ */
+
+typedef struct ci18n_mo
+{
+    const unsigned char *data;
+    size_t size;
+    bool big_endian;
+} ci18n_mo_t;
+
+static uint32_t ci18n_mo_u32(const ci18n_mo_t *mo, size_t at)
+{
+    const unsigned char *p = mo->data + at;
+
+    if (mo->big_endian)
+    {
+        return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+               ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    }
+    return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[1] << 8) | (uint32_t)p[0];
+}
+
+/* String `index` of the table at `table`, or false if it points outside the
+ * file. The caller has already checked that the table itself fits. */
+static bool ci18n_mo_string(const ci18n_mo_t *mo, uint32_t table, uint32_t index,
+                            const char **text, size_t *len)
+{
+    size_t length = ci18n_mo_u32(mo, (size_t)table + (size_t)index * 8);
+    size_t offset = ci18n_mo_u32(mo, (size_t)table + (size_t)index * 8 + 4);
+
+    if (offset > mo->size || length > mo->size - offset)
+    {
+        return false;
+    }
+
+    *text = (const char *)mo->data + offset;
+    *len = length;
+    return true;
+}
+
+static bool ci18n_mo_table_fits(const ci18n_mo_t *mo, uint32_t table, uint32_t count)
+{
+    return table <= mo->size && count <= (mo->size - table) / 8;
+}
+
+/* nplurals from the header entry, or 0 when it does not say. The header is
+ * not NUL-terminated as far as the bounds go, so the search is by length. */
+static unsigned ci18n_mo_nplurals(const char *header, size_t len)
+{
+    static const char needle[] = "nplurals=";
+    const size_t needle_len = sizeof(needle) - 1;
+    size_t i;
+
+    for (i = 0; i + needle_len < len; i++)
+    {
+        if (memcmp(header + i, needle, needle_len) == 0)
+        {
+            unsigned n = 0;
+
+            i += needle_len;
+            while (i < len && header[i] == ' ')
+            {
+                i++;
+            }
+            while (i < len && header[i] >= '0' && header[i] <= '9' && n < 100)
+            {
+                n = n * 10 + (unsigned)(header[i] - '0');
+                i++;
+            }
+            return n;
+        }
+    }
+    return 0;
+}
+
+/* gettext numbers plural forms, ci18n names them. The order CLDR categories
+ * take for each nplurals, matching tools/po2ci18n.py. */
+static const char *ci18n_mo_category(unsigned nplurals, size_t index)
+{
+    static const char *const orders[6][6] = {
+        {"other"},
+        {"one", "other"},
+        {"one", "few", "many"},
+        {"one", "few", "many", "other"},
+        {"zero", "one", "two", "few", "many"},
+        {"zero", "one", "two", "few", "many", "other"},
+    };
+
+    if (nplurals < 1 || nplurals > 6 || index >= nplurals)
+    {
+        return NULL;
+    }
+    return orders[nplurals - 1][index];
+}
+
+/* One entry into the language. The key is msgid, or "ctx.msgid". */
+static ci18n_line_result_t ci18n_mo_entry(ci18n_t *ctx, ci18n_language_t *lang,
+                                          unsigned nplurals,
+                                          const char *orig, size_t orig_len,
+                                          const char *trans, size_t trans_len)
+{
+    /* Room for "[many]" after a key cut to the limit. */
+    char key[CI18N_MAX_KEY_LENGTH + 8];
+    const char *msgid = orig;
+    const char *nul = (const char *)memchr(orig, '\0', orig_len);
+    const char *eot;
+    size_t msgid_len = nul ? (size_t)(nul - orig) : orig_len;
+    size_t key_max = CI18N_MAX_KEY_LENGTH - 1;
+    size_t key_len = 0;
+    size_t pos;
+    size_t index;
+    bool any = false;
+
+    if (msgid_len == 0 || trans_len == 0)
+    {
+        return CI18N_LINE_SKIPPED;
+    }
+
+    if (nul)
+    {
+        /* Plural: keep room for the longest suffix inside the key limit. */
+        key_max = (CI18N_MAX_KEY_LENGTH - 1 > 7) ? CI18N_MAX_KEY_LENGTH - 1 - 7 : 0;
+    }
+
+    /* "ctx\4msgid" becomes "ctx.msgid". */
+    eot = (const char *)memchr(msgid, '\4', msgid_len);
+    if (eot)
+    {
+        size_t ctx_len = (size_t)(eot - msgid);
+
+        memcpy(key, msgid, ctx_len < key_max ? ctx_len : key_max);
+        key_len = ctx_len < key_max ? ctx_len : key_max;
+        if (key_len < key_max)
+        {
+            key[key_len++] = '.';
+        }
+        msgid_len -= ctx_len + 1;
+        msgid = eot + 1;
+    }
+
+    if (msgid_len > key_max - key_len)
+    {
+        msgid_len = key_max - key_len;
+        CI18N_STATS_SLOT(ctx).keys_truncated++;
+    }
+    memcpy(key + key_len, msgid, msgid_len);
+    key_len += msgid_len;
+
+    if (!nul)
+    {
+        if (trans_len > CI18N_MAX_VALUE_LENGTH - 1)
+        {
+            trans_len = CI18N_MAX_VALUE_LENGTH - 1;
+            CI18N_STATS_SLOT(ctx).values_truncated++;
+        }
+        return ci18n_lang_set(ctx, lang, key, key_len, trans, trans_len)
+                   ? CI18N_LINE_LOADED
+                   : CI18N_LINE_FAILED;
+    }
+
+    /* Plural forms, one per NUL-separated piece of the translation. */
+    for (pos = 0, index = 0; pos <= trans_len; index++)
+    {
+        const char *form = trans + pos;
+        const char *end = (const char *)memchr(form, '\0', trans_len - pos);
+        size_t form_len = end ? (size_t)(end - form) : trans_len - pos;
+        const char *category = ci18n_mo_category(nplurals, index);
+
+        pos += form_len + 1;
+
+        if (!category || form_len == 0)
+        {
+            continue;
+        }
+
+        {
+            size_t cat_len = strlen(category);
+            size_t full_len = key_len + cat_len + 2;
+
+            key[key_len] = '[';
+            memcpy(key + key_len + 1, category, cat_len);
+            key[full_len - 1] = ']';
+
+            if (form_len > CI18N_MAX_VALUE_LENGTH - 1)
+            {
+                form_len = CI18N_MAX_VALUE_LENGTH - 1;
+                CI18N_STATS_SLOT(ctx).values_truncated++;
+            }
+            if (!ci18n_lang_set(ctx, lang, key, full_len, form, form_len))
+            {
+                return CI18N_LINE_FAILED;
+            }
+            any = true;
+        }
+    }
+
+    return any ? CI18N_LINE_LOADED : CI18N_LINE_SKIPPED;
+}
+
+static bool ci18n_load_mo_from_buffer_impl(ci18n_t *ctx, const char *language_code,
+                                           const void *data, size_t length)
+{
+    ci18n_language_t *lang;
+    ci18n_mo_t mo;
+    uint32_t magic;
+    uint32_t count;
+    uint32_t originals;
+    uint32_t translations;
+    unsigned nplurals = 0;
+    uint32_t i;
+
+    if (!ctx->initialized)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code || !data)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    if (!ci18n_code_fits(language_code))
+    {
+        return ci18n_fail(ctx, CI18N_ERR_CODE_TOO_LONG);
+    }
+
+    mo.data = (const unsigned char *)data;
+    mo.size = length;
+    mo.big_endian = false;
+
+    /* The whole structure is checked before anything is stored, so a file
+     * that is not a catalogue leaves the language untouched. */
+    if (length < 28)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_PARSE);
+    }
+
+    magic = ci18n_mo_u32(&mo, 0);
+    if (magic != 0x950412deU)
+    {
+        mo.big_endian = true;
+        if (ci18n_mo_u32(&mo, 0) != 0x950412deU)
+        {
+            return ci18n_fail(ctx, CI18N_ERR_PARSE);
+        }
+    }
+
+    /* Only the major revision changes the layout. */
+    if ((ci18n_mo_u32(&mo, 4) >> 16) != 0)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_PARSE);
+    }
+
+    count = ci18n_mo_u32(&mo, 8);
+    originals = ci18n_mo_u32(&mo, 12);
+    translations = ci18n_mo_u32(&mo, 16);
+
+    if (!ci18n_mo_table_fits(&mo, originals, count) ||
+        !ci18n_mo_table_fits(&mo, translations, count))
+    {
+        return ci18n_fail(ctx, CI18N_ERR_PARSE);
+    }
+
+    lang = ci18n_get_or_create_language(ctx, language_code);
+    if (!lang)
+    {
+        return false; /* get_or_create already recorded why */
+    }
+
+    ci18n_reset_load_stats(ctx);
+
+    /* The header is the entry with an empty msgid. msgfmt sorts it first,
+     * but a search costs nothing and trusts nothing. */
+    for (i = 0; i < count; i++)
+    {
+        const char *orig;
+        const char *trans;
+        size_t orig_len;
+        size_t trans_len;
+
+        if (ci18n_mo_string(&mo, originals, i, &orig, &orig_len) && orig_len == 0 &&
+            ci18n_mo_string(&mo, translations, i, &trans, &trans_len))
+        {
+            nplurals = ci18n_mo_nplurals(trans, trans_len);
+            break;
+        }
+    }
+
+    for (i = 0; i < count; i++)
+    {
+        const char *orig;
+        const char *trans;
+        size_t orig_len;
+        size_t trans_len;
+        ci18n_line_result_t result;
+
+        if (!ci18n_mo_string(&mo, originals, i, &orig, &orig_len) ||
+            !ci18n_mo_string(&mo, translations, i, &trans, &trans_len))
+        {
+            result = CI18N_LINE_MALFORMED;
+        }
+        else
+        {
+            result = ci18n_mo_entry(ctx, lang, nplurals, orig, orig_len, trans, trans_len);
+        }
+
+        ci18n_record_line(ctx, result, (size_t)i + 1);
+    }
+
+    ci18n_language_shrink(lang);
+    return ci18n_finish_load(ctx);
+}
+
+static bool ci18n_load_mo_impl(ci18n_t *ctx, const char *language_code, const char *filepath)
+{
+    FILE *file;
+    unsigned char *data;
+    long size;
+    size_t got;
+    bool result;
+
+    if (!ctx->initialized)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code || !filepath)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    /* See ci18n_load_language_impl for why the warning is silenced here. */
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    file = fopen(filepath, "rb");
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
+    if (!file)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_FILE_NOT_FOUND);
+    }
+
+    /* Read whole: the format is offsets into the file, so it cannot be
+     * streamed the way the line format is. */
+    if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0 ||
+        fseek(file, 0, SEEK_SET) != 0)
+    {
+        fclose(file);
+        return ci18n_fail(ctx, CI18N_ERR_FILE_NOT_FOUND);
+    }
+
+    data = (unsigned char *)malloc(size > 0 ? (size_t)size : 1);
+    if (!data)
+    {
+        fclose(file);
+        return ci18n_fail(ctx, CI18N_ERR_OUT_OF_MEMORY);
+    }
+
+    got = fread(data, 1, (size_t)size, file);
+    fclose(file);
+
+    result = ci18n_load_mo_from_buffer_impl(ctx, language_code, data, got);
+    free(data);
+    return result;
+}
+
+CI18N_DEF bool ci18n_load_mo_in(ci18n_t *catalog, const char *language_code, const char *filepath)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_load_mo_impl(catalog, language_code, filepath);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_load_mo(const char *language_code, const char *filepath)
+{
+    return ci18n_load_mo_in(&ci18n_ctx, language_code, filepath);
+}
+
+CI18N_DEF bool ci18n_load_mo_from_buffer_in(ci18n_t *catalog, const char *language_code,
+                                            const void *data, size_t length)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_load_mo_from_buffer_impl(catalog, language_code, data, length);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_load_mo_from_buffer(const char *language_code, const void *data, size_t length)
+{
+    return ci18n_load_mo_from_buffer_in(&ci18n_ctx, language_code, data, length);
+}
+#endif /* CI18N_NO_MO */
 
 
 static bool ci18n_set_current_impl(ci18n_t *ctx, const char *language_code)

@@ -26,7 +26,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples bench bench-threads bench-gettext examples
+.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples bench bench-threads bench-gettext examples test-mo
 
 all: example test
 
@@ -62,6 +62,16 @@ test-po: tests/test_po_roundtrip.c tools/po2ci18n.py tests/po/sample.po include/
 	$(PYTHON) tools/po2ci18n.py tests/po/sample.po -o po_roundtrip.txt
 	$(CC) $(ALL_CFLAGS) -o test_po_roundtrip tests/test_po_roundtrip.c
 	./test_po_roundtrip po_roundtrip.txt
+
+# The .mo loader against the converter: msgfmt compiles the same sample in
+# both byte orders, and each result must match what po2ci18n.py wrote.
+# Needs msgfmt from GNU gettext.
+test-mo: tests/test_po_roundtrip.c tools/po2ci18n.py tests/po/sample.po include/ci18n.h
+	$(PYTHON) tools/po2ci18n.py tests/po/sample.po -o po_roundtrip.txt
+	msgfmt --endianness=little -o po_roundtrip_le.mo tests/po/sample.po
+	msgfmt --endianness=big -o po_roundtrip_be.mo tests/po/sample.po
+	$(CC) $(ALL_CFLAGS) -o test_po_roundtrip tests/test_po_roundtrip.c
+	./test_po_roundtrip po_roundtrip.txt po_roundtrip_le.mo po_roundtrip_be.mo
 
 # Runs the suite under valgrind. Mostly overlapping with AddressSanitizer,
 # which CI already runs, but not identically: valgrind sees uninitialised
@@ -194,6 +204,7 @@ clean:
 		test_thread_local test_thread_local.exe \
 		fuzz_load_buffer fuzz_load_buffer.exe fuzz_replay fuzz_replay.exe \
 		test_po_roundtrip test_po_roundtrip.exe po_roundtrip.txt \
+		po_roundtrip_le.mo po_roundtrip_be.mo \
 		test_thread_shared test_thread_shared.exe \
 		bench_ci18n bench_ci18n.exe bench_threads bench_threads.exe \
 		bench_gettext bench_gettext.exe \

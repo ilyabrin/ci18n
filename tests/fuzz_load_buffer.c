@@ -1,5 +1,5 @@
 /*
- * Fuzz target for the translation parser.
+ * Fuzz target for the translation parser and the .mo loader.
  *
  *   make fuzz          build with clang and libFuzzer
  *   make fuzz-run      build, then fuzz for CI18N_FUZZ_SECONDS seconds
@@ -68,6 +68,12 @@ static size_t fuzz_echo(char *out, size_t capacity, const char *value,
     }
 
     return len;
+}
+
+static bool fuzz_touch(const char *key, const char *value, void *user_data)
+{
+    *(size_t *)user_data += strlen(key) + strlen(value);
+    return true;
 }
 
 static void fuzz_one(const uint8_t *data, size_t size)
@@ -187,6 +193,31 @@ static void fuzz_one(const uint8_t *data, size_t size)
     ci18n_load_from_buffer("fz", (const char *)data, size);
 
     ci18n_error_string(ci18n_last_error());
+
+    /* The same bytes as a compiled gettext catalogue. Random input rarely
+     * gets past the magic number, which is what the .mo seeds in the corpus
+     * are for: mutations of a real file reach the offset checks. */
+#ifndef CI18N_NO_MO
+    if (ci18n_load_mo_from_buffer("mo", data, size))
+    {
+        size_t touched = 0;
+
+        stats = ci18n_last_load_stats();
+        if (stats->entries_loaded + stats->lines_skipped + stats->lines_malformed !=
+            stats->lines_read)
+        {
+            abort();
+        }
+
+        /* Read every stored string end to end, so a bad length or offset
+         * that slipped through shows up under the address sanitizer. */
+        ci18n_foreach("mo", fuzz_touch, &touched);
+        if (ci18n_count("mo") > CI18N_MAX_KEYS_PER_LANGUAGE)
+        {
+            abort();
+        }
+    }
+#endif
 
     ci18n_free();
 }
