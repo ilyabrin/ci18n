@@ -49,6 +49,29 @@ jobs:
         if: runner.os == 'Windows'
         run: ./example.exe
 
+  # Runs the benchmarks so they keep building and keep working. The numbers a
+  # shared runner prints are noise, so nothing here compares them.
+  bench:
+    name: benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc make gettext locales
+          sudo locale-gen ru_RU.UTF-8
+
+      - name: Speed and memory
+        run: make bench
+
+      - name: Threads
+        run: make bench-threads
+
+      - name: glibc gettext, for reference
+        run: make bench-gettext
+
   # The header has branches that only compile under a newer standard, notably
   # the _Thread_local fallback. Without this sweep they are never built.
   standards:

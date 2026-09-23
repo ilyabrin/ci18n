@@ -34,6 +34,14 @@ fuzz_replay.exe
 test_po_roundtrip
 test_po_roundtrip.exe
 po_roundtrip.txt
+bench_ci18n
+bench_ci18n.exe
+bench_threads
+bench_threads.exe
+bench_gettext
+bench_gettext.exe
+bench_catalogue.txt
+bench_locale/
 
 # Fuzzing output. tests/fuzz_corpus holds the committed seeds and stays.
 fuzz_findings/

@@ -3,6 +3,7 @@
 #   make           build the example and build-and-run the tests
 #   make example   build the example only
 #   make test      build and run the unit tests
+#   make bench     measure speed and memory, see bench/
 #   make clean     remove build artifacts
 #
 # Override the compiler or add flags without losing the defaults:
@@ -24,7 +25,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples
+.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples bench bench-threads bench-gettext
 
 all: example test
 
@@ -111,6 +112,26 @@ fuzz-corpus: tests/fuzz_load_buffer.c include/ci18n.h
 cldr-samples:
 	$(PYTHON) tools/cldr_samples.py
 
+# Benchmarks. Optimised whatever CFLAGS says, since timing a -O0 build tells
+# you nothing. Each prints a Markdown table; see bench/README.md.
+BENCH_CFLAGS ?= -O2
+
+bench: bench/bench.c include/ci18n.h
+	$(CC) $(ALL_CFLAGS) $(BENCH_CFLAGS) -o bench_ci18n bench/bench.c
+	./bench_ci18n
+
+# One catalogue shared by 1 to 8 threads. Needs pthreads.
+bench-threads: bench/bench_threads.c include/ci18n.h
+	$(CC) $(ALL_CFLAGS) $(BENCH_CFLAGS) -D_POSIX_C_SOURCE=200809L -pthread \
+		-o bench_threads bench/bench_threads.c
+	./bench_threads
+
+# The same lookups through glibc gettext. Linux only, needs msgfmt and the
+# ru_RU.UTF-8 locale.
+bench-gettext: bench/bench_gettext.c
+	$(CC) $(ALL_CFLAGS) $(BENCH_CFLAGS) -o bench_gettext bench/bench_gettext.c
+	./bench_gettext
+
 # Installation. There is nothing to compile, so this copies one header and
 # generates a pkg-config file next to it.
 #
@@ -153,4 +174,6 @@ clean:
 		test_thread_local test_thread_local.exe \
 		fuzz_load_buffer fuzz_load_buffer.exe fuzz_replay fuzz_replay.exe \
 		test_po_roundtrip test_po_roundtrip.exe po_roundtrip.txt \
-		test_thread_shared test_thread_shared.exe
+		test_thread_shared test_thread_shared.exe \
+		bench_ci18n bench_ci18n.exe bench_threads bench_threads.exe \
+		bench_gettext bench_gettext.exe

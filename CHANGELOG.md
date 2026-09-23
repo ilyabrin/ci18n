@@ -13,6 +13,21 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## Unreleased
+
+### Added
+
+- Benchmarks. `make bench` times lookups, formatting and loading, and
+  reports memory; `make bench-threads` shows how a shared catalogue scales;
+  `make bench-gettext` runs the same lookups through glibc gettext. CMake
+  builds `ci18n_bench` too. The READMEs now carry the numbers, along with
+  code size and memory use.
+
+### Documentation
+
+- The shared threading mode does not scale reads across cores: every reader
+  updates the same lock. The READMEs now say so, with numbers.
+
 ## 2.10.0 - 2026-09-23
 
 ### Added

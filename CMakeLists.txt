@@ -46,6 +46,7 @@ endif()
 option(CI18N_BUILD_TESTS "Build and register the test suite" ${_ci18n_is_top_level})
 option(CI18N_BUILD_EXAMPLE "Build the example program" ${_ci18n_is_top_level})
 option(CI18N_INSTALL "Generate install rules" ${_ci18n_is_top_level})
+option(CI18N_BUILD_BENCH "Build the benchmark" ${_ci18n_is_top_level})
 
 # ---------------------------------------------------------------------------
 # The library
@@ -103,6 +104,19 @@ if(CI18N_BUILD_EXAMPLE)
   add_executable(ci18n_example examples/example.c)
   target_link_libraries(ci18n_example PRIVATE ci18n::ci18n)
   set_target_properties(ci18n_example PROPERTIES OUTPUT_NAME example)
+endif()
+
+# ---------------------------------------------------------------------------
+# Benchmark
+# ---------------------------------------------------------------------------
+
+# Built, not run: timings from a shared CI machine mean nothing, but building
+# it everywhere keeps it compiling everywhere. Run it yourself from a Release
+# build. The thread and gettext benchmarks need pthreads and glibc, so they
+# live in the Makefile only.
+if(CI18N_BUILD_BENCH)
+  add_executable(ci18n_bench bench/bench.c)
+  target_link_libraries(ci18n_bench PRIVATE ci18n::ci18n)
 endif()
 
 # ---------------------------------------------------------------------------

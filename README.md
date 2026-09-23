@@ -705,6 +705,14 @@ On glibc this mode needs `-D_POSIX_C_SOURCE=200809L`, or `-std=gnu99` instead
 of `-std=c99`, because strict ANSI mode hides the POSIX threading
 declarations. The header says so with an `#error` if you forget.
 
+**Expect the lock to cap throughput, not to scale it.** Readers do not wait
+for each other, but they all update the same lock, and that costs more than
+a lookup does. With `make bench-threads`, one thread does 30 million
+`ci18n_get` calls a second and any number of threads together about 17
+million. For a hot path, copy the strings you need once, or give each thread
+its own catalogue with `ci18n_create()`: each has its own lock, and eight
+threads then do 165 million calls a second between them.
+
 ### Pointer lifetime
 
 Every `const char *` the API returns points into library storage, so it stays
@@ -780,6 +788,43 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_format_plural(out, cap, key, n, ...)` | Plural form, filled |
 | `ci18n_detect_locale(out, cap)`          | Locale from the system |
 | `ci18n_set_current_best(locale)`         | Best match for a locale |
+
+## Performance
+
+Measured with `make bench` on an Intel Core i5-12400F, gcc 13 at `-O2`,
+Linux, 1 000-key Russian catalogue with English as fallback. Your numbers
+will differ; see [bench/README.md](bench/README.md) for the method and how to
+run it.
+
+| Operation | Time |
+| --- | ---: |
+| `ci18n_get`, key found | 24 ns |
+| `ci18n_get`, found in the fallback language | 34 ns |
+| `ci18n_get`, key missing | 37 ns |
+| `ci18n_format`, two placeholders | 92 ns |
+| `ci18n_format_plural` | 166 ns |
+| `ci18n_format`, value through a formatter | 167 ns |
+| Load 1 000 keys | 0.14 ms |
+| Load 10 000 keys | 1.4 ms |
+
+For reference, glibc's `gettext` on the same keys and machine takes 133 ns
+for a found key and 679 ns for a missing one (`make bench-gettext`).
+
+**Size.** The implementation adds about 24 KB of code at `-O2`, 18 KB at
+`-Os`, and no static data. The header itself is 160 KB of source, most of it
+comments, and is compiled in one file only.
+
+**Memory.**
+
+| What | Size |
+| --- | --- |
+| A catalogue, empty | 3.5 KB, no heap |
+| The default catalogue | 3.5 KB of static storage |
+| `CI18N_THREAD_LOCAL_CONTEXT` | 3.5 KB per thread that calls `ci18n_init()` |
+| Loaded translations | 2 to 2.5 times the file size |
+
+A 1 000-key language from a 66 KB file takes 156 KB of heap, a 10 000-key
+one from 664 KB takes 1.3 MB.
 
 ## Installing
 
