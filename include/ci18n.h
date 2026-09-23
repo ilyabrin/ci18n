@@ -1583,9 +1583,14 @@ typedef union
 
 /* ============================================================================
  * IMPLEMENTATION
+ *
+ * Guarded on its own, apart from the declarations above: a file that defines
+ * CI18N_IMPLEMENTATION may still include the header twice, directly and
+ * through a compiled catalogue, and the implementation must appear once.
  * ============================================================================ */
 
-#ifdef CI18N_IMPLEMENTATION
+#if defined(CI18N_IMPLEMENTATION) && !defined(CI18N_IMPLEMENTATION_INCLUDED)
+#define CI18N_IMPLEMENTATION_INCLUDED
 
 #include <stdio.h>
 #include <stdlib.h>

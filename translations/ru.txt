@@ -18,5 +18,4 @@ files[few]=%d файла
 files[many]=%d файлов
 
 # Escapes: only the parser decodes these.
-multiline=Первая строка.
-Вторая строка.
+multiline=Первая строка.\nВторая строка.

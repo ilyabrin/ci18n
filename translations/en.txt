@@ -16,5 +16,4 @@ files[one]=%d file
 files[other]=%d files
 
 # Escapes: only the parser decodes these.
-multiline=First line.
-Second line.
+multiline=First line.\nSecond line.
