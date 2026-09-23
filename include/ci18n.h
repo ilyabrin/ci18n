@@ -427,6 +427,18 @@ typedef union
                                          const char *value, const char *arg,
                                          void *user_data);
 
+    /*
+     * Called once per entry by ci18n_foreach(). Return true to go on, false
+     * to stop early.
+     *
+     * Both strings belong to the library and live only for the call, so copy
+     * what you want to keep. The callback runs while the catalogue's read
+     * lock is held in the shared threading mode, so it must not call back
+     * into the library.
+     */
+    typedef bool (*ci18n_entry_fn)(const char *key, const char *value,
+                                   void *user_data);
+
     typedef struct ci18n_formatter
     {
         char name[CI18N_MAX_FORMATTER_NAME];
@@ -658,6 +670,19 @@ typedef union
      * Returns: number of entries, or 0 if language not found
      */
     CI18N_DEF size_t ci18n_count(const char *language_code);
+
+    /*
+     * Visit every entry of one language, in no particular order.
+     *
+     * This is how a tool finds keys it did not know about: a checker that
+     * compares two languages, an exporter, a dump for debugging. Plural forms
+     * show up as their stored keys, `files[one]` and so on.
+     *
+     * Returns: how many entries the callback saw, counting the one that
+     * stopped the walk; 0 if the language is not loaded
+     */
+    CI18N_DEF size_t ci18n_foreach(const char *language_code, ci18n_entry_fn fn,
+                                   void *user_data);
 
     /*
      * Check if the system is initialized.
@@ -1230,6 +1255,8 @@ typedef union
     CI18N_DEF const char *ci18n_get_current_in(ci18n_t *catalog);
     CI18N_DEF size_t ci18n_get_languages_in(ci18n_t *catalog, const char **out, size_t capacity);
     CI18N_DEF size_t ci18n_count_in(ci18n_t *catalog, const char *language_code);
+    CI18N_DEF size_t ci18n_foreach_in(ci18n_t *catalog, const char *language_code,
+                                      ci18n_entry_fn fn, void *user_data);
     CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF ci18n_direction_t ci18n_current_direction_in(ci18n_t *catalog);
@@ -3095,6 +3122,62 @@ CI18N_DEF size_t ci18n_count(const char *language_code)
 
     CI18N_READ_LOCK(&ci18n_ctx);
     result = ci18n_count_impl(&ci18n_ctx, language_code);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
+
+    return result;
+}
+
+static size_t ci18n_foreach_impl(ci18n_t *ctx, const char *language_code,
+                                 ci18n_entry_fn fn, void *user_data)
+{
+    const ci18n_language_t *lang;
+    int lang_idx;
+    size_t i;
+
+    if (!ctx->initialized)
+    {
+        ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
+        return 0;
+    }
+
+    if (!language_code || !fn)
+    {
+        ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
+        return 0;
+    }
+
+    lang_idx = ci18n_find_language(ctx, language_code);
+    if (lang_idx < 0)
+    {
+        ci18n_fail(ctx, CI18N_ERR_LANGUAGE_NOT_FOUND);
+        return 0;
+    }
+
+    /* Success is recorded before the walk: the callback cannot reach the
+     * library, so nothing it does can change the outcome. */
+    ci18n_succeed(ctx);
+
+    lang = &ctx->languages[lang_idx];
+    for (i = 0; i < lang->count; i++)
+    {
+        const ci18n_entry_t *e = &lang->entries[i];
+
+        if (!fn(ci18n_arena_at(&lang->strings, e->key),
+                ci18n_arena_at(&lang->strings, e->value), user_data))
+        {
+            return i + 1;
+        }
+    }
+
+    return lang->count;
+}
+CI18N_DEF size_t ci18n_foreach(const char *language_code, ci18n_entry_fn fn,
+                               void *user_data)
+{
+    size_t result;
+
+    CI18N_READ_LOCK(&ci18n_ctx);
+    result = ci18n_foreach_impl(&ci18n_ctx, language_code, fn, user_data);
     CI18N_READ_UNLOCK(&ci18n_ctx);
 
     return result;
@@ -4984,11 +5067,72 @@ static bool ci18n_plural_key(char *out, size_t capacity, const char *key, const 
  * then key itself. Cardinals and ordinals share this and differ only in how
  * the category is chosen.
  */
-static const char *ci18n_forms_impl(ci18n_t *ctx, const char *key, long count,
-                                    bool ordinal)
+/* One language's entry for a key, or NULL. Sets no error: the callers try
+ * several before deciding the key is missing. */
+static const char *ci18n_lookup_one(ci18n_t *ctx, const char *code, const char *key)
+{
+    ci18n_language_t *lang;
+    int lang_idx;
+    int entry_idx;
+
+    lang_idx = ci18n_find_language(ctx, code);
+    if (lang_idx < 0)
+    {
+        return NULL;
+    }
+
+    lang = &ctx->languages[lang_idx];
+    entry_idx = ci18n_find_entry(lang, key);
+    return (entry_idx >= 0)
+               ? ci18n_arena_at(&lang->strings, lang->entries[entry_idx].value)
+               : NULL;
+}
+
+/* The form of `key` for `count` in one language, with that language's own
+ * rules picking the form. */
+static const char *ci18n_forms_one(ci18n_t *ctx, const char *code, const char *key,
+                                   long count, bool ordinal)
 {
     char buffer[CI18N_MAX_KEY_LENGTH];
     ci18n_plural_category_t category;
+    const char *result;
+
+    if (code[0] == '\0')
+    {
+        return NULL;
+    }
+
+    category = ordinal ? ci18n_ordinal_category(code, count)
+                       : ci18n_plural_category(code, count);
+
+    /* The exact form for this count. */
+    if (ci18n_plural_key(buffer, sizeof(buffer), key, ci18n_plural_category_name(category)))
+    {
+        result = ci18n_lookup_one(ctx, code, buffer);
+        if (result)
+        {
+            return result;
+        }
+    }
+
+    /* The catch-all form, for a translation that only bothered with two. */
+    if (category != CI18N_PLURAL_OTHER &&
+        ci18n_plural_key(buffer, sizeof(buffer), key, "other"))
+    {
+        result = ci18n_lookup_one(ctx, code, buffer);
+        if (result)
+        {
+            return result;
+        }
+    }
+
+    /* A translation with no plural forms at all. */
+    return ci18n_lookup_one(ctx, code, key);
+}
+
+static const char *ci18n_forms_impl(ci18n_t *ctx, const char *key, long count,
+                                    bool ordinal)
+{
     const char *result;
 
     if (!ctx->initialized)
@@ -5003,34 +5147,19 @@ static const char *ci18n_forms_impl(ci18n_t *ctx, const char *key, long count,
         return NULL;
     }
 
-    category = ordinal ? ci18n_ordinal_category(ctx->current_language, count)
-                       : ci18n_plural_category(ctx->current_language, count);
-
-    /* The exact form for this count. */
-    if (ci18n_plural_key(buffer, sizeof(buffer), key, ci18n_plural_category_name(category)))
+    /* One language at a time, each under its own rules. Asking the current
+     * language which form to use and then taking that form from the
+     * fallback gave English text Arabic grammar: "3th" where Arabic, with
+     * a single ordinal form, picks "other". */
+    result = ci18n_forms_one(ctx, ctx->current_language, key, count, ordinal);
+    if (!result)
     {
-        result = ci18n_get_impl(ctx, buffer);
-        if (result)
-        {
-            return result;
-        }
+        result = ci18n_forms_one(ctx, ctx->fallback_language, key, count, ordinal);
     }
 
-    /* The catch-all form, for a translation that only bothered with two. */
-    if (category != CI18N_PLURAL_OTHER &&
-        ci18n_plural_key(buffer, sizeof(buffer), key, "other"))
-    {
-        result = ci18n_get_impl(ctx, buffer);
-        if (result)
-        {
-            return result;
-        }
-    }
-
-    /* A translation with no plural forms at all. */
-    result = ci18n_get_impl(ctx, key);
     if (result)
     {
+        ci18n_succeed(ctx);
         return result;
     }
 
@@ -5511,6 +5640,18 @@ CI18N_DEF size_t ci18n_count_in(ci18n_t *catalog, const char *language_code)
 
     CI18N_READ_LOCK(catalog);
     result = ci18n_count_impl(catalog, language_code);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF size_t ci18n_foreach_in(ci18n_t *catalog, const char *language_code,
+                                  ci18n_entry_fn fn, void *user_data)
+{
+    size_t result;
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_foreach_impl(catalog, language_code, fn, user_data);
     CI18N_READ_UNLOCK(catalog);
 
     return result;

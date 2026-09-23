@@ -104,6 +104,59 @@ if(CI18N_BUILD_EXAMPLE)
   add_executable(ci18n_example examples/example.c)
   target_link_libraries(ci18n_example PRIVATE ci18n::ci18n)
   set_target_properties(ci18n_example PROPERTIES OUTPUT_NAME example)
+
+  # The three larger examples, each checked against the output it is known
+  # to give. /utf-8 because their strings are Cyrillic and Arabic, and MSVC
+  # otherwise reads the source in the system code page.
+  add_executable(ci18n_example_cli_sync examples/cli_sync/i18n_check.c)
+  add_executable(ci18n_example_ui examples/embedded_ui/ui.c)
+  set(_ci18n_examples ci18n_example_cli_sync ci18n_example_ui)
+
+  # The server includes pthread.h, so the same gate as the thread tests.
+  find_package(Threads)
+  if(Threads_FOUND AND CMAKE_USE_PTHREADS_INIT)
+    add_executable(ci18n_example_server examples/server/server.c)
+    target_link_libraries(ci18n_example_server PRIVATE Threads::Threads)
+    list(APPEND _ci18n_examples ci18n_example_server)
+  endif()
+
+  foreach(_example IN LISTS _ci18n_examples)
+    target_link_libraries(${_example} PRIVATE ci18n::ci18n)
+    target_compile_options(${_example} PRIVATE $<$<C_COMPILER_ID:MSVC>:/utf-8>)
+  endforeach()
+
+  if(CI18N_BUILD_TESTS)
+    set(_check "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_example.cmake")
+    set(_locales "examples/cli_sync/locales")
+
+    # Exits 1 on purpose: one of the sample files is broken.
+    add_test(NAME example_cli_sync
+      COMMAND ${CMAKE_COMMAND}
+        -DPROGRAM=$<TARGET_FILE:ci18n_example_cli_sync>
+        "-DARGS=${_locales}/en.txt|${_locales}/ru.txt|${_locales}/de.txt"
+        -DEXIT_CODE=1
+        -DEXPECTED=examples/cli_sync/expected.txt
+        -P "${_check}"
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    add_test(NAME example_ui
+      COMMAND ${CMAKE_COMMAND}
+        -DPROGRAM=$<TARGET_FILE:ci18n_example_ui>
+        -DEXIT_CODE=0
+        -DEXPECTED=examples/embedded_ui/expected.txt
+        -P "${_check}"
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    if(TARGET ci18n_example_server)
+      add_test(NAME example_server
+        COMMAND ${CMAKE_COMMAND}
+          -DPROGRAM=$<TARGET_FILE:ci18n_example_server>
+          -DEXIT_CODE=0
+          -DEXPECTED=examples/server/expected.txt
+          -P "${_check}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------

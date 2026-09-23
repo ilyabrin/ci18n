@@ -2,6 +2,7 @@
 #
 #   make           build the example and build-and-run the tests
 #   make example   build the example only
+#   make examples  build the three larger examples and check their output
 #   make test      build and run the unit tests
 #   make bench     measure speed and memory, see bench/
 #   make clean     remove build artifacts
@@ -25,7 +26,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples bench bench-threads bench-gettext
+.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples bench bench-threads bench-gettext examples
 
 all: example test
 
@@ -132,6 +133,25 @@ bench-gettext: bench/bench_gettext.c
 	$(CC) $(ALL_CFLAGS) $(BENCH_CFLAGS) -o bench_gettext bench/bench_gettext.c
 	./bench_gettext
 
+# The three examples in examples/*/, each run and compared with the output it
+# is known to give, so a change that alters what they print cannot slip by.
+# The server needs pthreads. The checker exits 1 on purpose: one of its
+# sample files is broken so there is something to report.
+examples: examples/cli_sync/i18n_check.c examples/server/server.c \
+		examples/embedded_ui/ui.c include/ci18n.h
+	$(CC) $(ALL_CFLAGS) -o example_cli_sync examples/cli_sync/i18n_check.c
+	$(CC) $(ALL_CFLAGS) -D_POSIX_C_SOURCE=200809L -pthread \
+		-o example_server examples/server/server.c
+	$(CC) $(ALL_CFLAGS) -Os -o example_ui examples/embedded_ui/ui.c
+	./example_cli_sync examples/cli_sync/locales/en.txt \
+		examples/cli_sync/locales/ru.txt examples/cli_sync/locales/de.txt \
+		> example_cli_sync.out; test $$? -eq 1
+	diff -u examples/cli_sync/expected.txt example_cli_sync.out
+	./example_server > example_server.out
+	diff -u examples/server/expected.txt example_server.out
+	./example_ui > example_ui.out
+	diff -u examples/embedded_ui/expected.txt example_ui.out
+
 # Installation. There is nothing to compile, so this copies one header and
 # generates a pkg-config file next to it.
 #
@@ -176,4 +196,7 @@ clean:
 		test_po_roundtrip test_po_roundtrip.exe po_roundtrip.txt \
 		test_thread_shared test_thread_shared.exe \
 		bench_ci18n bench_ci18n.exe bench_threads bench_threads.exe \
-		bench_gettext bench_gettext.exe
+		bench_gettext bench_gettext.exe \
+		example_cli_sync example_cli_sync.exe example_cli_sync.out \
+		example_server example_server.exe example_server.out \
+		example_ui example_ui.exe example_ui.out

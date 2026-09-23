@@ -42,6 +42,10 @@ bench_gettext
 bench_gettext.exe
 bench_catalogue.txt
 bench_locale/
+example_cli_sync
+example_server
+example_ui
+example_*.out
 
 # Fuzzing output. tests/fuzz_corpus holds the committed seeds and stays.
 fuzz_findings/

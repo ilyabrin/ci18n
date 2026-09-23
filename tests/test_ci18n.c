@@ -137,6 +137,62 @@ TEST(test_load_from_buffer)
     ci18n_free();
 }
 
+typedef struct foreach_probe
+{
+    size_t seen;
+    size_t stop_after;
+    bool saw_plural;
+    bool values_match;
+} foreach_probe_t;
+
+static bool foreach_collect(const char *key, const char *value, void *user_data)
+{
+    foreach_probe_t *p = (foreach_probe_t *)user_data;
+
+    p->seen++;
+    if (strcmp(key, "files[one]") == 0)
+    {
+        p->saw_plural = true;
+    }
+    /* Every value in the fixture is "v:" followed by its own key. */
+    if (strncmp(value, "v:", 2) != 0 || strcmp(value + 2, key) != 0)
+    {
+        p->values_match = false;
+    }
+    return p->stop_after == 0 || p->seen < p->stop_after;
+}
+
+TEST(test_foreach_visits_every_entry)
+{
+    foreach_probe_t probe = {0, 0, false, true};
+    const char *buffer =
+        "a=v:a\n"
+        "b=v:b\n"
+        "files[one]=v:files[one]\n";
+
+    ci18n_init();
+    ci18n_load_from_buffer("en", buffer, strlen(buffer));
+
+    ASSERT(ci18n_foreach("en", foreach_collect, &probe) == 3);
+    ASSERT(probe.seen == 3);
+    ASSERT(probe.saw_plural);
+    ASSERT(probe.values_match);
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    /* Stopping early counts the entry that said stop. */
+    probe.seen = 0;
+    probe.stop_after = 2;
+    ASSERT(ci18n_foreach("en", foreach_collect, &probe) == 2);
+
+    ASSERT(ci18n_foreach("xx", foreach_collect, &probe) == 0);
+    ASSERT(ci18n_last_error() == CI18N_ERR_LANGUAGE_NOT_FOUND);
+    ASSERT(ci18n_foreach("en", NULL, &probe) == 0);
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
+
+    ci18n_free();
+    ASSERT(ci18n_foreach("en", foreach_collect, &probe) == 0);
+}
+
 TEST(test_load_from_buffer_empty)
 {
     ci18n_init();
@@ -2358,6 +2414,37 @@ TEST(test_ordinal_lookup)
     ci18n_free();
 }
 
+/* A form taken from the fallback language is chosen by the fallback's rules.
+ * Found by the server example: Arabic asked for "rank" at 3, has none, and
+ * got English "{count}th", because Arabic's one ordinal form is "other". */
+TEST(test_forms_from_the_fallback_use_its_rules)
+{
+    ci18n_init();
+
+    ci18n_set("en", "rank[one]", "{count}st");
+    ci18n_set("en", "rank[few]", "{count}rd");
+    ci18n_set("en", "rank[other]", "{count}th");
+    ci18n_set("en", "files[one]", "{count} file");
+    ci18n_set("en", "files[other]", "{count} files");
+    ci18n_set("ar", "motd", "x");
+    ci18n_set("ru", "motd", "x");
+    ci18n_set_fallback("en");
+
+    ci18n_set_current("ar");
+    ASSERT_STR_EQ(ci18n_ordinal("rank", 3), "{count}rd");
+
+    /* 21 is "one" in Russian and "other" in English. */
+    ci18n_set_current("ru");
+    ASSERT_STR_EQ(ci18n_plural("files", 21), "{count} files");
+
+    /* The current language's own entry still wins, even a bare one: its
+     * text is in the right language, the fallback's is not. */
+    ci18n_set("ru", "files", "{count} ф.");
+    ASSERT_STR_EQ(ci18n_plural("files", 21), "{count} ф.");
+
+    ci18n_free();
+}
+
 TEST(test_ordinal_lookup_falls_back_like_plurals)
 {
     ci18n_init();
@@ -3489,6 +3576,7 @@ int main(void)
     RUN_TEST(test_init_free);
     RUN_TEST(test_init_twice);
     RUN_TEST(test_load_from_buffer);
+    RUN_TEST(test_foreach_visits_every_entry);
     RUN_TEST(test_load_from_buffer_empty);
     RUN_TEST(test_load_from_buffer_with_empty_lines);
     RUN_TEST(test_set_get);
@@ -3556,6 +3644,7 @@ int main(void)
     RUN_TEST(test_ordinal_category_unknown_language_is_other);
     RUN_TEST(test_ordinal_lookup);
     RUN_TEST(test_ordinal_lookup_falls_back_like_plurals);
+    RUN_TEST(test_forms_from_the_fallback_use_its_rules);
     RUN_TEST(test_format_ordinal);
     RUN_TEST(test_ordinal_in_a_catalogue);
 

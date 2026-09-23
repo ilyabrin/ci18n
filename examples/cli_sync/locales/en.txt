@@ -1,0 +1,8 @@
+# The reference language. Every other file is checked against this one.
+app_title=Photo Sorter
+greeting=Hello, {name}!
+delete_confirm=Delete {count} photos from {album}?
+menu_quit=Quit
+
+photos[one]={count} photo
+photos[other]={count} photos

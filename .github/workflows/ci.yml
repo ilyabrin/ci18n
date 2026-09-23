@@ -49,6 +49,13 @@ jobs:
         if: runner.os == 'Windows'
         run: ./example.exe
 
+      # Builds the three examples in examples/*/ and compares what they print
+      # with the output they are known to give. Windows runs the same checks
+      # through ctest in the cmake job, which needs no diff.
+      - name: Examples (Unix)
+        if: runner.os != 'Windows'
+        run: make CC=${{ matrix.compiler }} examples
+
   # Runs the benchmarks so they keep building and keep working. The numbers a
   # shared runner prints are noise, so nothing here compares them.
   bench:
@@ -391,3 +398,10 @@ jobs:
         run: |
           make clean
           make CC=${{ matrix.compiler }} test-shared EXTRA_CFLAGS="-Werror $SAN_FLAGS"
+
+      # The server example reloads a translation under four readers, which is
+      # the shared mode used the way a real program uses it.
+      - name: Examples
+        run: |
+          make clean
+          make CC=${{ matrix.compiler }} examples EXTRA_CFLAGS="-Werror $SAN_FLAGS"

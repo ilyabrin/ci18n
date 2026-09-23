@@ -1,0 +1,9 @@
+# Complete: every key, and the three plural forms Russian needs.
+app_title=Сортировщик фото
+greeting=Привет, {name}!
+delete_confirm=Удалить {count} фото из альбома «{album}»?
+menu_quit=Выход
+
+photos[one]={count} фотография
+photos[few]={count} фотографии
+photos[many]={count} фотографий

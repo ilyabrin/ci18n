@@ -1,0 +1,39 @@
+[1] ru-RU,ru;q=0.9,en;q=0.8
+  lang=ru dir=ltr
+  С возвращением
+  Анна, у вас 3 новых сообщения
+  Вы 2-й в очереди
+  Баланс: 1500,75 USD
+[2] en-US,en;q=0.5
+  lang=en dir=ltr
+  Welcome back
+  Bob, you have 1 new message
+  You are 22nd in line
+  Balance: 9.99 USD
+[3] ar-EG
+  lang=ar dir=rtl
+  مرحبا بعودتك
+  ليلى، لديك 11 رسالة جديدة
+  You are 3rd in line
+  الرصيد: 42.00 USD
+[4] fr-FR, de;q=0.7
+  lang=en dir=ltr
+  Welcome back
+  Chloé, you have 0 new messages
+  You are 13th in line
+  Balance: 0.12 USD
+[5] de;q=0.3, ru;q=0.9
+  lang=ru dir=ltr
+  С возвращением
+  Олег, у вас 21 новое сообщение
+  Вы 1-й в очереди
+  Баланс: 1,00 USD
+[6] ar;q=0.8, en-GB
+  lang=en dir=ltr
+  Welcome back
+  Sam, you have 2 new messages
+  You are 101st in line
+  Balance: 500.00 USD
+
+reload: 200 reloads under 4 readers, 0 torn reads
+ru motd is now: Добро пожаловать снова

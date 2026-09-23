@@ -1,0 +1,7 @@
+# Deliberately broken, one of each problem the checker finds.
+app_title=Fotosortierer
+greeting=Hallo, {nmae}!
+delete_confirm {count} Fotos aus {album} löschen?
+old_banner=Jetzt neu!
+
+photos[other]={count} Fotos

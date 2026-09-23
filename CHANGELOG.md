@@ -15,6 +15,27 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ## Unreleased
 
+### Added
+
+- `ci18n_foreach()` and `ci18n_foreach_in()` visit every entry of a
+  language, for tools that need keys they did not know in advance: a
+  checker, an exporter, a debug dump.
+- Three examples, each with a README: a CI checker for translation files, a
+  threaded server that reloads translations under readers, and a small
+  device's screen in three languages, one of them right-to-left. `make
+  examples` and ctest build them and compare their output with the output
+  they are known to give.
+
+### Fixed
+
+- A plural or ordinal form taken from the fallback language was chosen by
+  the current language's rules. With Arabic current and English as the
+  fallback, 3 came out as "3th": Arabic has a single ordinal form, so it
+  asked for `[other]`. Each language is now tried with its own rules, the
+  current one first. A side effect: a plain `key` in the current language
+  now wins over a `key[form]` in the fallback, since it is in the right
+  language.
+
 ### Changed
 
 - Reads in the shared threading mode scale across cores. A catalogue holds

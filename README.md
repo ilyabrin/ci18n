@@ -152,6 +152,19 @@ Pass `NULL` to ask for the count alone: `ci18n_get_languages(NULL, 0)`.
 ci18n_free();
 ```
 
+## Examples
+
+Three programs of the kind people build with this, each with a short README.
+`make examples` builds all three and checks their output.
+
+| Example | What it is | Shows |
+| --- | --- | --- |
+| [cli_sync](examples/cli_sync/) | A CI check that finds missing keys, plural forms and placeholders | Catalogues, `ci18n_foreach`, load stats, fallback |
+| [server](examples/server/) | Worker threads serving requests in the language each one asks for | Shared mode, `Accept-Language`, formatters, reload under readers |
+| [embedded_ui](examples/embedded_ui/) | A 20x4 display in English, Russian and Arabic | Small limits, packs from outside, fitting UTF-8, right-to-left |
+
+[examples/example.c](examples/example.c) is the short tour of the basics.
+
 ## Translation File Format
 
 ```ini
@@ -315,7 +328,9 @@ ru:   1 файл    2 файла    5 файлов   11 файлов   21 фай
 Note 11 and 21: a rule that just checks for 1 gets Russian wrong, which is
 why the category comes from CLDR rather than from the caller. Lookup tries
 `key[category]`, then `key[other]`, then plain `key`, so a translation only
-has to be as detailed as it needs to be.
+has to be as detailed as it needs to be. All three come from one language:
+the current one first, and only when it has none of them, the fallback, with
+the fallback's own rules picking the form.
 
 Rules are known for 71 languages, grouped the way CLDR groups them:
 English-like, French and Portuguese, Russian, Ukrainian and Belarusian,
@@ -761,6 +776,7 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_clear(lang)`                      | Clear language        |
 | `ci18n_remove_language(lang)`            | Unload it and free the slot |
 | `ci18n_count(lang)`                      | Entry count           |
+| `ci18n_foreach(lang, fn, ud)`            | Visit every entry     |
 | `ci18n_get_languages(out, cap)`          | List of languages     |
 | `ci18n_last_error()`                     | Why the last call failed |
 | `ci18n_error_string(err)`                | Error code as text    |

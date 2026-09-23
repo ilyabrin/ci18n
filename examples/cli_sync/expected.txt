@@ -1,0 +1,12 @@
+en (reference):
+  5 keys
+ru:
+  5 of 5 keys, ok
+de:
+  examples/cli_sync/locales/de.txt:4: no '=' on the line, 1 such line(s) skipped
+  missing: delete_confirm, users see "Delete {count} photos from {album}?"
+  placeholders: greeting has {nmae}, en has {name}
+  missing: menu_quit, users see "Quit"
+  missing form: photos[one]
+  stale: old_banner is gone from en
+  3 of 5 keys, needs work
