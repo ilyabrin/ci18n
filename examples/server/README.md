@@ -28,7 +28,8 @@ MinGW.
 ## The shape to copy
 
 1. **`CI18N_THREAD_SHARED`.** Any thread may read, and one may write while
-   they do. Reads scale with cores, see the README's Threads section.
+   they do. Reads scale with cores, see
+   [Catalogues and threads](../../docs/catalogs-and-threads.md#the-shared-mode).
 2. **One catalogue per language.** A catalogue has one current language and
    a server serves all of them at once, so a request picks a catalogue, not
    a language. Each catalogue loads English as its fallback.

@@ -13,6 +13,25 @@ make test       # tests only
 make clean
 ```
 
+Every target, and what it needs beyond a C compiler:
+
+| Target | Does | Needs |
+| --- | --- | --- |
+| `make test` | The unit tests | |
+| `make examples` | Build the three examples and compare their output | pthreads |
+| `make test-threads` | Thread-local mode tests | pthreads |
+| `make test-shared` | Shared mode tests, readers against a writer | pthreads |
+| `make test-po` | `.po` converter round trip | python3 |
+| `make test-mo` | `.mo` loader against the converter, both byte orders | python3, `msgfmt` |
+| `make fuzz-run` | Fuzz the parsers, see below | clang with libFuzzer |
+| `make fuzz-corpus` | Replay the fuzz seeds | |
+| `make bench`, `bench-threads`, `bench-gettext` | Timings, see [bench/README.md](bench/README.md) | pthreads; glibc for gettext |
+| `make cldr-samples`, `cldr-numbers` | Regenerate the CLDR tables | python3, a network |
+| `make install`, `uninstall` | The header and a pkg-config file | |
+
+A module left out with a `CI18N_NO_*` macro is tested by passing it in:
+`make test EXTRA_CFLAGS=-DCI18N_MINIMAL`. CI does that for each one.
+
 Build with warnings as errors before you open a PR, because CI does:
 
 ```bash
@@ -199,10 +218,12 @@ the code cannot state itself.
 
 - One logical change per PR
 - A test for anything that touches the parser or the lookup path
-- Public API changes documented in both the header and
-  [README.md](README.md)
-- The English README is canonical. Updating the Russian
+- Public API changes documented in the header, on the page in
+  [docs/](docs/) that covers the feature, and in [docs/api.md](docs/api.md)
+- The English docs are canonical. Updating the Russian
   [README.ru.md](README.ru.md) is welcome but never required
+- `python3 tools/check_docs.py` checks that every link in the docs resolves;
+  CI runs it too
 
 ## Public API changes
 

@@ -8,7 +8,7 @@ character separates the decimals, which one groups the thousands, how the
 minus sign is written, how many digits a number needs before it is grouped
 at all, and whether groups after the first are three digits or two, as in
 the Indian 12,34,567. That is all the library takes. Currency, percent,
-compact forms and native digits are out of scope, see the README.
+compact forms and native digits are out of scope, see docs/scope.md.
 
     python3 tools/cldr_numbers.py            # fetch the pinned CLDR release
     python3 tools/cldr_numbers.py --data DIR # use DIR/<lang>/numbers.json

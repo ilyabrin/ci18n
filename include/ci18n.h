@@ -929,10 +929,9 @@ typedef union
      *
      *   printf("<html dir=\"%s\">", ci18n_direction_name(ci18n_current_direction()));
      *
-     * This is direction only, not bidirectional text. Mixing an English
-     * product name into an Arabic sentence correctly needs the Unicode
-     * bidirectional algorithm, which is not here. See "What this does not do"
-     * in the README.
+     * This is the direction of a language, not of a sentence. For a value in
+     * the other direction inside a translation, an English name in Arabic,
+     * see ci18n_set_bidi_isolation() below and docs/unicode-and-direction.md.
      * ============================================================================ */
 
     /*

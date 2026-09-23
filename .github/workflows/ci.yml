@@ -103,6 +103,18 @@ jobs:
       - name: Run example
         run: ./example
 
+  # Every link in the docs must resolve, and the README's first example must
+  # compile as written and print what its comments say.
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Links, and the README example
+        run: python3 tools/check_docs.py --run
+
   # Every module that can be left out, one at a time and all together. A
   # function a module forgot to guard shows up here as an unused static or
   # a missing symbol, and the tests that remain have to pass without it.

@@ -13,6 +13,22 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## Unreleased
+
+### Documentation
+
+- The English documentation is reorganised for someone arriving new. The
+  README is a landing page: a working example first, then installing, a map
+  of what the library does, and links. The detail moved, unchanged in
+  substance, into [docs/](docs/README.md): one page per task, from getting
+  started to embedded builds, and an API reference grouped by purpose with
+  the module that leaves each function out. Stale statements went on the
+  way: the header comment still said bidi was not supported, and the feature
+  list stopped at 2.0.
+- `tools/check_docs.py` checks that every link and anchor in the docs
+  resolves, and compiles and runs the README example, comparing its output
+  with the comments. CI runs it.
+
 ## 2.16.0 - 2026-09-23
 
 ### Added
