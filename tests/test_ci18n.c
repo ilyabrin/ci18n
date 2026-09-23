@@ -82,6 +82,28 @@ static int test_failed;
  * Test Cases
  * ============================================================================ */
 
+
+/*
+ * Copy text into a fixed buffer, truncating if it does not fit.
+ *
+ * Not strcpy or strncpy: MSVC deprecates both, this builds with warnings as
+ * errors, and a helper that is handed the destination size cannot itself be
+ * the thing that overflows.
+ */
+static void copy_into(char *out, size_t capacity, const char *text)
+{
+    size_t len = strlen(text);
+
+    if (len > capacity - 1)
+    {
+        len = capacity - 1;
+    }
+
+    memcpy(out, text, len);
+    out[len] = '\0';
+}
+
+
 TEST(test_init_free)
 {
     ASSERT(ci18n_init() == true);
@@ -1510,45 +1532,45 @@ TEST(test_utf8_truncate_cuts_at_a_boundary)
     char buffer[32];
 
     /* "Привет" is 12 bytes of 2-byte characters, so a budget of 7 gives 6. */
-    strcpy(buffer, "Привет");
+    copy_into(buffer, sizeof(buffer), "Привет");
     ASSERT(ci18n_utf8_truncate(buffer, 7) == 6);
     ASSERT_STR_EQ(buffer, "При");
     ASSERT(ci18n_utf8_valid(buffer));
 
     /* A budget that already falls on a boundary is used in full. */
-    strcpy(buffer, "Привет");
+    copy_into(buffer, sizeof(buffer), "Привет");
     ASSERT(ci18n_utf8_truncate(buffer, 6) == 6);
     ASSERT_STR_EQ(buffer, "При");
 
     /* Text within budget is untouched, whether the budget is exact or ample. */
-    strcpy(buffer, "Привет");
+    copy_into(buffer, sizeof(buffer), "Привет");
     ASSERT(ci18n_utf8_truncate(buffer, 12) == 12);
     ASSERT_STR_EQ(buffer, "Привет");
 
-    strcpy(buffer, "Привет");
+    copy_into(buffer, sizeof(buffer), "Привет");
     ASSERT(ci18n_utf8_truncate(buffer, 100) == 12);
     ASSERT_STR_EQ(buffer, "Привет");
 
     /* Not even one character fits, so nothing is kept. */
-    strcpy(buffer, "Привет");
+    copy_into(buffer, sizeof(buffer), "Привет");
     ASSERT(ci18n_utf8_truncate(buffer, 1) == 0);
     ASSERT_STR_EQ(buffer, "");
 
-    strcpy(buffer, "Привет");
+    copy_into(buffer, sizeof(buffer), "Привет");
     ASSERT(ci18n_utf8_truncate(buffer, 0) == 0);
     ASSERT_STR_EQ(buffer, "");
 
     /* ASCII has no boundaries to respect, so the budget is exact. */
-    strcpy(buffer, "hello");
+    copy_into(buffer, sizeof(buffer), "hello");
     ASSERT(ci18n_utf8_truncate(buffer, 3) == 3);
     ASSERT_STR_EQ(buffer, "hel");
 
     /* A 4-byte character backs off the full three bytes. */
-    strcpy(buffer, "\xF0\x9F\x91\x8D" "x");
+    copy_into(buffer, sizeof(buffer), "\xF0\x9F\x91\x8D" "x");
     ASSERT(ci18n_utf8_truncate(buffer, 3) == 0);
     ASSERT_STR_EQ(buffer, "");
 
-    strcpy(buffer, "ab\xF0\x9F\x91\x8D");
+    copy_into(buffer, sizeof(buffer), "ab\xF0\x9F\x91\x8D");
     ASSERT(ci18n_utf8_truncate(buffer, 5) == 2);
     ASSERT_STR_EQ(buffer, "ab");
 
@@ -1686,10 +1708,8 @@ static size_t fmt_spy(char *out, size_t capacity, const char *value,
 {
     seen_calls++;
     seen_user_data = user_data;
-    strncpy(seen_value, value, sizeof(seen_value) - 1);
-    seen_value[sizeof(seen_value) - 1] = '\0';
-    strncpy(seen_arg, arg, sizeof(seen_arg) - 1);
-    seen_arg[sizeof(seen_arg) - 1] = '\0';
+    copy_into(seen_value, sizeof(seen_value), value);
+    copy_into(seen_arg, sizeof(seen_arg), arg);
 
     if (capacity > 0)
     {
@@ -1966,7 +1986,8 @@ TEST(test_formatter_table_is_bounded_and_replaceable)
 
     for (i = 0; i < CI18N_MAX_FORMATTERS; i++)
     {
-        sprintf(name, "f%u", (unsigned)i);
+        name[0] = 'f';
+        ci18n_render_long(name + 1, sizeof(name) - 1, (long)i);
         ASSERT(ci18n_set_formatter(name, fmt_upper, NULL));
     }
 
@@ -1998,7 +2019,7 @@ TEST(test_formatter_argument_too_long_is_a_parse_error)
     ci18n_init();
     ASSERT(ci18n_set_formatter("spy", fmt_spy, NULL));
 
-    strcpy(pattern, "{v:spy,");
+    copy_into(pattern, sizeof(pattern), "{v:spy,");
     for (i = strlen(pattern); i < sizeof(pattern) - 3; i++)
     {
         pattern[i] = 'x';
