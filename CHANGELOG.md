@@ -13,6 +13,26 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## Unreleased
+
+### Added
+
+- Bidi isolation. `ci18n_set_bidi_isolation(true)` wraps every value
+  `ci18n_format` and its relatives fill in with FSI and PDI, so an English
+  name in an Arabic sentence, or a Hebrew one in English, no longer
+  reorders the text around it. Per catalogue, off by default.
+  `ci18n_bidi_isolate()` does the same for one string, `ci18n_bidi_mark()`
+  gives LRM or RLM for a direction, and `CI18N_FSI`, `CI18N_PDI`,
+  `CI18N_LRM` and `CI18N_RLM` are the characters themselves.
+
+### Fixed
+
+- A result cut short by `ci18n_format` and its relatives could skip a
+  stretch of text: when a partial character was dropped at the end of the
+  buffer, a shorter piece after it still went into the bytes left free.
+  "{v}!" with v = "aб" in 3 bytes gave "a!". Output now stops at the first
+  cut, so it is always a prefix of the full result.
+
 ## 2.12.0 - 2026-09-23
 
 ### Added

@@ -67,7 +67,7 @@ wrong, which is worse than not offering it at all.
 Planned: per-locale number separators.
 
 Text direction arrived in 2.7.0, UTF-8 helpers and pluggable formatters in
-2.9.0, and ordinals in 2.10.0. Each has a section of its own below.
+2.9.0, ordinals in 2.10.0, and bidi isolation in 2.13.0. Each has a section of its own below.
 
 ### Which one to pick
 
@@ -414,9 +414,35 @@ An unknown language is left to right. That is the commoner answer and the
 safer one: a left-to-right interface shown right to left is broken in a way
 nobody misses, while the reverse merely looks untranslated.
 
-This is direction only, not bidirectional text. Putting an English product
-name inside an Arabic sentence correctly needs the Unicode bidirectional
-algorithm, which is not here.
+### Mixed-direction text
+
+A value in the other direction reorders the sentence around it. An English
+name inside Arabic drags the comma after it to the wrong side, and a Hebrew
+name in an English sentence can swap places with the number beside it. The
+fix is to isolate each value, so the renderer lays it out on its own:
+
+```c
+ci18n_set_bidi_isolation(true);
+ci18n_format(out, sizeof(out), "inbox", "name", "Sam", NULL);
+/* "{name}، لديك..." becomes FSI "Sam" PDI "، لديك..." */
+```
+
+Every value `ci18n_format` and its relatives fill in, `{count}` and
+formatter output included, is wrapped in FSI and PDI, two invisible
+characters that browsers, GTK, Qt, Android and iOS all honour. Text the
+translator wrote is never wrapped. The setting is per catalogue and off by
+default: turn it on for text people read, and leave it off for logs and
+anything a program parses, since the marks are real bytes, 3 each.
+
+| For | Use |
+| --- | --- |
+| A value placed without `ci18n_format` | `ci18n_bidi_isolate(out, cap, text)` |
+| A line ending in a number or a symbol | append `ci18n_bidi_mark(dir)`, LRM or RLM |
+| The raw characters | `CI18N_FSI`, `CI18N_PDI`, `CI18N_LRM`, `CI18N_RLM` |
+
+This marks text for a renderer that runs the Unicode bidirectional
+algorithm. It does not run the algorithm itself, so a display controller that
+draws bytes left to right as they come still needs a bidi step of its own.
 
 ### Interpolation
 
@@ -792,6 +818,9 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_direction(code)`                  | Which way a language is written |
 | `ci18n_direction_name(dir)`              | Direction as "ltr" or "rtl" |
 | `ci18n_current_direction()`              | Direction of the current language |
+| `ci18n_set_bidi_isolation(on)`           | Isolate filled-in values |
+| `ci18n_bidi_isolate(out, cap, text)`     | Wrap one value in FSI ... PDI |
+| `ci18n_bidi_mark(dir)`                   | LRM or RLM for a direction |
 | `ci18n_utf8_valid(text)`                 | Is it well-formed UTF-8 |
 | `ci18n_utf8_length(text)`                | Characters, not bytes |
 | `ci18n_utf8_sequence_length(text)`       | Bytes in the character here |

@@ -2417,6 +2417,116 @@ TEST(test_ordinal_lookup)
 /* A form taken from the fallback language is chosen by the fallback's rules.
  * Found by the server example: Arabic asked for "rank" at 3, has none, and
  * got English "{count}th", because Arabic's one ordinal form is "other". */
+TEST(test_bidi_isolate)
+{
+    char out[64];
+
+    ASSERT(ci18n_bidi_isolate(out, sizeof(out), "Bob") == 9);
+    ASSERT_STR_EQ(out, CI18N_FSI "Bob" CI18N_PDI);
+
+    /* Measuring writes nothing. */
+    ASSERT(ci18n_bidi_isolate(NULL, 0, "Bob") == 9);
+    ASSERT(ci18n_bidi_isolate(out, sizeof(out), NULL) == 0);
+    ASSERT_STR_EQ(out, "");
+
+    /* Too small: cut at a character boundary, never inside FSI or text. */
+    ASSERT(ci18n_bidi_isolate(out, 6, "Bob") == 9);
+    ASSERT_STR_EQ(out, CI18N_FSI "Bo");
+    ASSERT(ci18n_bidi_isolate(out, 3, "Bob") == 9);
+    ASSERT_STR_EQ(out, "");
+    ASSERT(ci18n_utf8_valid(out));
+
+    ASSERT_STR_EQ(ci18n_bidi_mark(CI18N_DIR_RTL), CI18N_RLM);
+    ASSERT_STR_EQ(ci18n_bidi_mark(CI18N_DIR_LTR), CI18N_LRM);
+}
+
+static size_t upper_formatter(char *out, size_t capacity, const char *value,
+                              const char *arg, void *user_data)
+{
+    size_t len = strlen(value);
+    size_t i;
+
+    (void)arg;
+    (void)user_data;
+    for (i = 0; out && i < len && i + 1 < capacity; i++)
+    {
+        out[i] = (char)((value[i] >= 'a' && value[i] <= 'z') ? value[i] - 32 : value[i]);
+    }
+    if (out && capacity > 0)
+    {
+        out[i] = '\0';
+    }
+    return len;
+}
+
+/* A cut result is a prefix of the full one. Before, a short piece after
+ * the cut could still slip into the bytes a dropped partial character
+ * left free: "{v}!" with v = "aб" in 3 bytes gave "a!". */
+TEST(test_format_truncation_is_a_prefix)
+{
+    char out[3];
+
+    ci18n_init();
+    ci18n_set("en", "k", "{v}!");
+    ci18n_set_current("en");
+
+    ASSERT(ci18n_format(out, sizeof(out), "k", "v", "a\xD0\xB1", NULL) == 4);
+    ASSERT_STR_EQ(out, "a");
+
+    ci18n_free();
+}
+
+TEST(test_bidi_isolation_in_format)
+{
+    char out[128];
+
+    ASSERT(ci18n_set_bidi_isolation(true) == false);
+    ASSERT(ci18n_last_error() == CI18N_ERR_NOT_INITIALIZED);
+
+    ci18n_init();
+    ci18n_set("en", "hi", "Hi {name}, {n:up}! {missing} {x:nope}");
+    ci18n_set("en", "files[one]", "{count} file");
+    ci18n_set("en", "files[other]", "{count} files");
+    ci18n_set_current("en");
+    ci18n_set_formatter("up", upper_formatter, NULL);
+
+    /* Off by default: nothing added. */
+    ci18n_format(out, sizeof(out), "hi", "name", "Bob", "n", "ok", "x", "1", NULL);
+    ASSERT_STR_EQ(out, "Hi Bob, OK! {missing} {x:nope}");
+
+    /* On: every filled value, formatted or not, and {count}; the
+     * placeholders left visible are not values and stay bare. */
+    ASSERT(ci18n_set_bidi_isolation(true));
+    ci18n_format(out, sizeof(out), "hi", "name", "Bob", "n", "ok", "x", "1", NULL);
+    ASSERT_STR_EQ(out, "Hi " CI18N_FSI "Bob" CI18N_PDI ", " CI18N_FSI "OK" CI18N_PDI
+                       "! {missing} {x:nope}");
+    ci18n_format_plural(out, sizeof(out), "files", 2, NULL);
+    ASSERT_STR_EQ(out, CI18N_FSI "2" CI18N_PDI " files");
+
+    /* The measured length counts the marks. */
+    ASSERT(ci18n_format_plural(NULL, 0, "files", 2, NULL) == strlen(out));
+
+    /* Per catalogue: another one is unaffected. */
+    {
+        ci18n_t *other = ci18n_create();
+
+        ci18n_set_in(other, "en", "hi", "Hi {name}");
+        ci18n_set_current_in(other, "en");
+        ci18n_format_in(other, out, sizeof(out), "hi", "name", "Bob", NULL);
+        ASSERT_STR_EQ(out, "Hi Bob");
+        ci18n_destroy(other);
+    }
+
+    /* ci18n_free() turns it off. */
+    ci18n_free();
+    ci18n_init();
+    ci18n_set("en", "hi", "Hi {name}");
+    ci18n_set_current("en");
+    ci18n_format(out, sizeof(out), "hi", "name", "Bob", NULL);
+    ASSERT_STR_EQ(out, "Hi Bob");
+    ci18n_free();
+}
+
 TEST(test_forms_from_the_fallback_use_its_rules)
 {
     ci18n_init();
@@ -3645,6 +3755,9 @@ int main(void)
     RUN_TEST(test_ordinal_lookup);
     RUN_TEST(test_ordinal_lookup_falls_back_like_plurals);
     RUN_TEST(test_forms_from_the_fallback_use_its_rules);
+    RUN_TEST(test_bidi_isolate);
+    RUN_TEST(test_format_truncation_is_a_prefix);
+    RUN_TEST(test_bidi_isolation_in_format);
     RUN_TEST(test_format_ordinal);
     RUN_TEST(test_ordinal_in_a_catalogue);
 

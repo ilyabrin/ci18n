@@ -49,5 +49,6 @@ MinGW.
 | Plurals, ordinals, placeholders | `handle` |
 | A formatter with per-language settings in `user_data` | `format_money` |
 | Text direction for `<html dir>` | `handle` |
+| Bidi isolation, so "Sam" in an Arabic reply stays in place | `setup`, request 7 |
 | A key missing in Arabic, served from English with English grammar | request 3 |
 | Reloading under readers | `reloader`, `reader` |

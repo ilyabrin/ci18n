@@ -456,6 +456,7 @@ typedef union
         ci18n_load_stats_t load_stats;
         ci18n_formatter_t formatters[CI18N_MAX_FORMATTERS];
         size_t formatter_count;
+        bool bidi_isolation; /* wrap filled-in values in FSI ... PDI */
         bool initialized;
 #ifdef CI18N_THREAD_SHARED
         /* Inside the catalogue, not beside the global, so that every
@@ -905,6 +906,62 @@ typedef union
      */
     CI18N_DEF ci18n_direction_t ci18n_current_direction(void);
 
+    /*
+     * Unicode bidi controls, as UTF-8 string literals.
+     *
+     * Mixed-direction text goes wrong in a way that is easy to miss: an
+     * English name inside an Arabic sentence drags the punctuation after it
+     * to the wrong side, and a number after a Hebrew word can swap places
+     * with it. Isolating the inserted part fixes that: FSI opens an isolate
+     * whose direction comes from its own first strong character, PDI closes
+     * it. LRM and RLM are invisible characters with a fixed direction, for
+     * pinning down the end of a line that finishes in a digit or a symbol.
+     *
+     * Invisible when rendered, but they are real characters: 3 bytes each,
+     * and they count in ci18n_utf8_length().
+     */
+#define CI18N_FSI "\xE2\x81\xA8" /* U+2068 FIRST STRONG ISOLATE */
+#define CI18N_PDI "\xE2\x81\xA9" /* U+2069 POP DIRECTIONAL ISOLATE */
+#define CI18N_LRM "\xE2\x80\x8E" /* U+200E LEFT-TO-RIGHT MARK */
+#define CI18N_RLM "\xE2\x80\x8F" /* U+200F RIGHT-TO-LEFT MARK */
+
+    /*
+     * Isolate every value ci18n_format() and its relatives fill in.
+     *
+     * With this on, "{name}" expands to FSI, the value, PDI, so a value
+     * written in the other direction cannot reorder the sentence around it.
+     * Turn it on for anything shown to people in a right-to-left language,
+     * or that shows right-to-left names or text in a left-to-right one.
+     * Leave it off for logs, file names and anything a program parses.
+     *
+     * Off by default, and per catalogue. ci18n_free() turns it off again.
+     *
+     * Returns: false only before ci18n_init()
+     */
+    CI18N_DEF bool ci18n_set_bidi_isolation(bool enabled);
+
+    /*
+     * Copy text into out wrapped in FSI ... PDI, for a value you place
+     * yourself rather than through ci18n_format().
+     *
+     * Follows snprintf(): writes at most capacity-1 bytes, always
+     * terminates when capacity is non-zero, never cuts a character in half,
+     * and returns the length the whole result would have had. Pass
+     * out = NULL, capacity = 0 to measure.
+     *
+     * Returns: the full length, 6 bytes more than text; 0 for NULL text
+     */
+    CI18N_DEF size_t ci18n_bidi_isolate(char *out, size_t capacity, const char *text);
+
+    /*
+     * The mark for a direction: CI18N_RLM for right to left, CI18N_LRM
+     * otherwise. Append it after a trailing number or symbol so the line
+     * ends the way its language reads.
+     *
+     * Returns: a static string, never NULL
+     */
+    CI18N_DEF const char *ci18n_bidi_mark(ci18n_direction_t direction);
+
     /* ============================================================================
      * Interpolation
      * ============================================================================
@@ -1260,6 +1317,7 @@ typedef union
     CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF ci18n_direction_t ci18n_current_direction_in(ci18n_t *catalog);
+    CI18N_DEF bool ci18n_set_bidi_isolation_in(ci18n_t *catalog, bool enabled);
     CI18N_DEF bool ci18n_set_formatter_in(ci18n_t *catalog, const char *name,
                                           ci18n_formatter_fn fn, void *user_data);
     CI18N_DEF bool ci18n_remove_formatter_in(ci18n_t *catalog, const char *name);
@@ -2334,6 +2392,7 @@ static void ci18n_reset_data(ci18n_t *ctx)
     memset(&ctx->load_stats, 0, sizeof(ctx->load_stats));
     memset(ctx->formatters, 0, sizeof(ctx->formatters));
     ctx->formatter_count = 0;
+    ctx->bidi_isolation = false;
     ctx->initialized = false;
 }
 
@@ -3480,19 +3539,25 @@ typedef struct ci18n_sink
     size_t capacity;
     size_t written; /* bytes actually placed, never past capacity - 1 */
     size_t needed;  /* bytes the full result would take */
+    bool full;      /* something was cut; later pieces are only counted */
 } ci18n_sink_t;
 
 static void ci18n_sink_put(ci18n_sink_t *sink, const char *text, size_t len)
 {
     sink->needed += len;
 
-    if (sink->capacity == 0)
+    if (sink->capacity == 0 || sink->full)
     {
         return;
     }
 
     if (sink->written + len > sink->capacity - 1)
     {
+        /* Nothing after this point may be written, even a piece short
+         * enough to fit in what is left: the output would then skip a
+         * stretch of the text and stop being a prefix of the full result,
+         * for example a value's closing PDI without its opening FSI. */
+        sink->full = true;
         len = sink->capacity - 1 - sink->written;
 
         /* Cutting here would land wherever the budget ran out, which for
@@ -3560,7 +3625,7 @@ static void ci18n_sink_put_formatted(ci18n_sink_t *sink,
     size_t room = 0;
     size_t produced;
 
-    if (sink->capacity > 0)
+    if (sink->capacity > 0 && !sink->full)
     {
         /* Everything left, including the byte the terminator will want, which
          * is exactly snprintf's idea of a capacity. */
@@ -3579,6 +3644,7 @@ static void ci18n_sink_put_formatted(ci18n_sink_t *sink,
 
     if (produced > room - 1)
     {
+        sink->full = true;
         produced = room - 1;
     }
 
@@ -3642,6 +3708,7 @@ static size_t ci18n_expand(ci18n_t *ctx, char *out, size_t capacity,
     sink.capacity = capacity;
     sink.written = 0;
     sink.needed = 0;
+    sink.full = false;
 
     while (text[i] != '\0')
     {
@@ -3758,7 +3825,15 @@ static size_t ci18n_expand(ci18n_t *ctx, char *out, size_t capacity,
 
             if (formatter)
             {
+                if (ctx->bidi_isolation)
+                {
+                    ci18n_sink_put(&sink, CI18N_FSI, 3);
+                }
                 ci18n_sink_put_formatted(&sink, formatter, value, formatter_arg);
+                if (ctx->bidi_isolation)
+                {
+                    ci18n_sink_put(&sink, CI18N_PDI, 3);
+                }
             }
             else
             {
@@ -3767,7 +3842,18 @@ static size_t ci18n_expand(ci18n_t *ctx, char *out, size_t capacity,
         }
         else if (value)
         {
+            /* The isolate goes around the value only, never around text
+             * the translator wrote, so a placeholder left visible for a
+             * missing formatter stays unwrapped as well. */
+            if (ctx->bidi_isolation)
+            {
+                ci18n_sink_put(&sink, CI18N_FSI, 3);
+            }
             ci18n_sink_put(&sink, value, strlen(value));
+            if (ctx->bidi_isolation)
+            {
+                ci18n_sink_put(&sink, CI18N_PDI, 3);
+            }
         }
         else
         {
@@ -5041,6 +5127,70 @@ CI18N_DEF ci18n_direction_t ci18n_current_direction_in(ci18n_t *catalog)
 CI18N_DEF ci18n_direction_t ci18n_current_direction(void)
 {
     return ci18n_current_direction_in(&ci18n_ctx);
+}
+
+static bool ci18n_set_bidi_isolation_impl(ci18n_t *ctx, bool enabled)
+{
+    if (!ctx->initialized)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    ctx->bidi_isolation = enabled;
+    ci18n_succeed(ctx);
+    return true;
+}
+
+CI18N_DEF bool ci18n_set_bidi_isolation_in(ci18n_t *catalog, bool enabled)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_set_bidi_isolation_impl(catalog, enabled);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_set_bidi_isolation(bool enabled)
+{
+    return ci18n_set_bidi_isolation_in(&ci18n_ctx, enabled);
+}
+
+CI18N_DEF size_t ci18n_bidi_isolate(char *out, size_t capacity, const char *text)
+{
+    ci18n_sink_t sink;
+
+    if (out && capacity > 0)
+    {
+        out[0] = '\0';
+    }
+
+    if (!text)
+    {
+        return 0;
+    }
+
+    sink.out = out;
+    sink.capacity = out ? capacity : 0;
+    sink.written = 0;
+    sink.needed = 0;
+    sink.full = false;
+
+    ci18n_sink_put(&sink, CI18N_FSI, 3);
+    ci18n_sink_put(&sink, text, strlen(text));
+    ci18n_sink_put(&sink, CI18N_PDI, 3);
+
+    if (sink.capacity > 0)
+    {
+        out[sink.written] = '\0';
+    }
+    return sink.needed;
+}
+
+CI18N_DEF const char *ci18n_bidi_mark(ci18n_direction_t direction)
+{
+    return (direction == CI18N_DIR_RTL) ? CI18N_RLM : CI18N_LRM;
 }
 
 /* Build "key[suffix]", or report that it will not fit. */

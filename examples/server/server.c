@@ -119,6 +119,9 @@ static bool setup(void)
             !ci18n_load_from_buffer_in(l->cat, l->code, l->text, strlen(l->text)) ||
             !ci18n_set_current_in(l->cat, l->code) ||
             !ci18n_set_fallback_in(l->cat, "en") ||
+            /* Replies are shown to people, some in Arabic, and user names
+             * come in any script: isolate every filled-in value. */
+            !ci18n_set_bidi_isolation_in(l->cat, true) ||
             !ci18n_set_formatter_in(l->cat, "money", format_money,
                                     (void *)l->decimal_separator))
         {
@@ -228,6 +231,7 @@ static request_t REQUESTS[] = {
     {"fr-FR, de;q=0.7", "Chloé", 0, 13, "12", ""},
     {"de;q=0.3, ru;q=0.9", "Олег", 21, 1, "100", ""},
     {"ar;q=0.8, en-GB", "Sam", 2, 101, "50000", ""},
+    {"ar", "Sam", 2, 1, "100", ""},
 };
 
 #define REQUEST_COUNT (sizeof(REQUESTS) / sizeof(REQUESTS[0]))
