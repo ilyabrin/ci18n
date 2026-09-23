@@ -23,6 +23,7 @@ Every target, and what it needs beyond a C compiler:
 | `make test-shared` | Shared mode tests, readers against a writer | pthreads |
 | `make test-po` | `.po` converter round trip | python3 |
 | `make test-mo` | `.mo` loader against the converter, both byte orders | python3, `msgfmt` |
+| `make test-compiled` | Compiled catalogues against the same files loaded, both threading modes, and the build errors they promise | pthreads |
 | `make fuzz-run` | Fuzz the parsers, see below | clang with libFuzzer |
 | `make fuzz-corpus` | Replay the fuzz seeds | |
 | `make bench`, `bench-threads`, `bench-gettext` | Timings, see [bench/README.md](bench/README.md) | pthreads; glibc for gettext |

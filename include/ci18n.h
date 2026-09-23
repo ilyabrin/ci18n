@@ -154,7 +154,9 @@ extern "C"
  *   CI18N_NO_LOCALE    ci18n_detect_locale and ci18n_set_current_best
  *   CI18N_NO_MO        the gettext .mo loader
  *   CI18N_NO_FILES     every loader that opens a file; buffers still load
- *   CI18N_MINIMAL      all of the above
+ *   CI18N_NO_COMPILED  ci18n_use_compiled, languages built by ci18n_compile
+ *   CI18N_MINIMAL      all of the above but CI18N_NO_COMPILED, which is
+ *                      what a minimal build most likely wants to keep
  *
  * What stays in any build: loading from buffers, lookup, plurals, fallback,
  * catalogues, text direction, the UTF-8 helpers and the diagnostics.
@@ -384,6 +386,27 @@ typedef union
         uint32_t next;  /* next entry in this bucket's chain, or CI18N_NO_INDEX */
     } ci18n_entry_t;
 
+    /*
+     * A language compiled into the program by tools/ci18n_compile: its
+     * strings, and a perfect hash over its keys, all constant. Nothing in it
+     * is meant to be written by hand; the layout may change between
+     * versions, which is what `format` catches.
+     */
+#define CI18N_COMPILED_FORMAT 1u
+
+    typedef struct ci18n_compiled
+    {
+        uint32_t format;          /* CI18N_COMPILED_FORMAT when generated */
+        uint32_t count;           /* entries */
+        uint32_t slot_mask;       /* slots - 1, slots a power of two */
+        uint32_t seed_mask;       /* seeds - 1, seeds a power of two */
+        const char *strings;      /* keys and values, NUL-terminated */
+        const uint32_t *entries;  /* key offset, value offset, key hash */
+        const uint32_t *slots;    /* entry index, top 16 bits of its hash;
+                                     0xFFFFFFFF if empty */
+        const uint16_t *seeds;    /* displacement per bucket */
+    } ci18n_compiled_t;
+
     typedef struct ci18n_language
     {
         char code[CI18N_MAX_CODE_LENGTH];
@@ -393,6 +416,9 @@ typedef union
         size_t count;
         size_t capacity;
         size_t bucket_count; /* always a power of two, or zero */
+#ifndef CI18N_NO_COMPILED
+        const ci18n_compiled_t *compiled; /* set instead of the above */
+#endif
     } ci18n_language_t;
 
     /*
@@ -414,7 +440,8 @@ typedef union
         CI18N_ERR_KEY_NOT_FOUND,     /* no such key in the languages consulted */
         CI18N_ERR_PARSE,             /* the load dropped or truncated something */
         CI18N_ERR_TOO_MANY_FORMATTERS,/* CI18N_MAX_FORMATTERS reached */
-        CI18N_ERR_UNKNOWN_FORMATTER  /* a translation asked for one that is not registered */
+        CI18N_ERR_UNKNOWN_FORMATTER, /* a translation asked for one that is not registered */
+        CI18N_ERR_READ_ONLY          /* the language is compiled in and cannot change */
     } ci18n_error_t;
 
     /*
@@ -423,7 +450,7 @@ typedef union
      * enumerator would have to be handled by every exhaustive switch over
      * ci18n_error_t, forever, despite not being an error.
      */
-#define CI18N_ERR_LAST CI18N_ERR_UNKNOWN_FORMATTER
+#define CI18N_ERR_LAST CI18N_ERR_READ_ONLY
 
     /*
      * What the last load actually did. A loader returns true whenever it could
@@ -588,6 +615,37 @@ typedef union
      * Returns: true if the buffer was read, false on failure
      */
     CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length);
+
+#ifndef CI18N_NO_COMPILED
+    /*
+     * Use a language compiled into the program by tools/ci18n_compile.
+     *
+     * Nothing is copied or parsed: the language points at the constant data,
+     * so it costs no heap, loads in no time, and every string it returns
+     * stays valid for the life of the program. It replaces whatever the
+     * language held before.
+     *
+     * Returns: false if the data came from a different format version
+     */
+    CI18N_DEF bool ci18n_use_compiled(const char *language_code,
+                                      const ci18n_compiled_t *compiled);
+#endif
+
+    /*
+     * A translation key the compiler checks.
+     *
+     *   ci18n_get(CI18N_KEY(greeting))      the string "greeting"
+     *   ci18n_get(CI18N_KEY(greting))       a compile error
+     *
+     * The keys come from a header tools/ci18n_compile writes, with or
+     * without the translations themselves (--keys-only), so this works with
+     * catalogues loaded at run time too. A key that is not a C identifier,
+     * such as "menu.open", has no macro; pass it as a plain string.
+     *
+     * The result is an ordinary string, but not a constant expression, so it
+     * cannot initialise a static variable.
+     */
+#define CI18N_KEY(name) ((void)sizeof(ci18n_key_##name), #name)
 
 #ifndef CI18N_NO_MO
 #if !defined(CI18N_NO_FILES)
@@ -1433,6 +1491,10 @@ typedef union
     CI18N_DEF bool ci18n_load_language_in(ci18n_t *catalog, const char *language_code, const char *filepath);
 #endif
     CI18N_DEF bool ci18n_load_from_buffer_in(ci18n_t *catalog, const char *language_code, const char *buffer, size_t length);
+#ifndef CI18N_NO_COMPILED
+    CI18N_DEF bool ci18n_use_compiled_in(ci18n_t *catalog, const char *language_code,
+                                         const ci18n_compiled_t *compiled);
+#endif
 #ifndef CI18N_NO_MO
 #if !defined(CI18N_NO_FILES)
     CI18N_DEF bool ci18n_load_mo_in(ci18n_t *catalog, const char *language_code, const char *filepath);
@@ -2081,6 +2143,56 @@ static bool ci18n_ensure_capacity(ci18n_t *ctx, ci18n_language_t *lang)
  * Returns the entry index, or -1. The cached hash filters out almost every
  * candidate before strcmp is reached.
  */
+#ifndef CI18N_NO_COMPILED
+/*
+ * Where a key lands in a compiled language. The generator calls this too,
+ * so the two can never disagree: the hash above picks a bucket, the bucket's
+ * seed is mixed in, and the result picks a slot. A seed per bucket is what
+ * makes the hash perfect: the generator tries seeds until every key in the
+ * bucket lands in a slot of its own.
+ */
+static uint32_t ci18n_compiled_mix(uint32_t hash, uint32_t seed)
+{
+    uint32_t h = hash ^ (seed * 0x9E3779B9u);
+
+    h ^= h >> 16;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 13;
+    h *= 0xC2B2AE35u;
+    h ^= h >> 16;
+    return h;
+}
+
+static const char *ci18n_compiled_find(const ci18n_compiled_t *c, const char *key,
+                                       size_t key_len)
+{
+    uint32_t hash = ci18n_hash(key, key_len);
+    uint32_t seed = c->seeds[hash & c->seed_mask];
+    uint32_t slot = c->slots[ci18n_compiled_mix(hash, seed) & c->slot_mask];
+    uint32_t index = slot & 0xFFFFu;
+    const char *stored;
+
+    /* A perfect hash has no chains, so one entry is all there is to check.
+     * A key that is not there lands somewhere too, though. The slot carries
+     * the top of the key's hash, which turns almost every such key away
+     * before the entry, one more read from memory, is touched at all; the
+     * entry's full hash catches the rest before any string is compared. An
+     * empty slot fails the first test, since no hash is 0xFFFF on top and
+     * missing at the bottom. */
+    if ((slot >> 16) != (hash >> 16) || index == 0xFFFFu ||
+        c->entries[3u * index + 2u] != hash)
+    {
+        return NULL;
+    }
+    stored = c->strings + c->entries[3u * index];
+    if (strncmp(stored, key, key_len) != 0 || stored[key_len] != '\0')
+    {
+        return NULL;
+    }
+    return c->strings + c->entries[3u * index + 1u];
+}
+#endif
+
 static int ci18n_find_entry_n(ci18n_language_t *lang, const char *key, size_t key_len,
                               uint32_t hash)
 {
@@ -2273,6 +2385,44 @@ static bool ci18n_lang_set_ex(ci18n_t *ctx, ci18n_language_t *lang,
     lang->count++;
 
     return true;
+}
+
+/*
+ * Whether a language may be written. A compiled one is constant data in the
+ * program, so storing into it fails, and says why, rather than copying the
+ * language to the heap behind the caller's back: that copy is the memory
+ * compiling it was meant to save.
+ */
+static bool ci18n_writable(ci18n_t *ctx, const ci18n_language_t *lang)
+{
+#ifndef CI18N_NO_COMPILED
+    if (lang->compiled)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_READ_ONLY);
+    }
+#else
+    (void)ctx;
+    (void)lang;
+#endif
+    return true;
+}
+
+/* A key's value in one language, however the language is stored. */
+static const char *ci18n_lang_value(ci18n_language_t *lang, const char *key)
+{
+    int entry_idx;
+
+#ifndef CI18N_NO_COMPILED
+    if (lang->compiled)
+    {
+        return ci18n_compiled_find(lang->compiled, key, strlen(key));
+    }
+#endif
+
+    entry_idx = ci18n_find_entry(lang, key);
+    return (entry_idx >= 0)
+               ? ci18n_arena_at(&lang->strings, lang->entries[entry_idx].value)
+               : NULL;
 }
 
 /* Programmatic values arrive already unescaped by the C compiler, so this
@@ -2743,6 +2893,12 @@ static bool ci18n_load_language_impl(ci18n_t *ctx, const char *language_code, co
         return false; /* get_or_create already recorded why */
     }
 
+    if (!ci18n_writable(ctx, lang))
+    {
+        fclose(file);
+        return false;
+    }
+
     /* The line buffer is a few KB, too much for a small device's stack to
      * take on top of the chunk, so it comes from the heap. */
     lines = (ci18n_lines_t *)calloc(1, sizeof(*lines));
@@ -2804,6 +2960,11 @@ static bool ci18n_load_from_buffer_impl(ci18n_t *ctx, const char *language_code,
         return false; /* get_or_create already recorded why */
     }
 
+    if (!ci18n_writable(ctx, lang))
+    {
+        return false;
+    }
+
     lines = (ci18n_lines_t *)calloc(1, sizeof(*lines));
     if (!lines)
     {
@@ -2818,6 +2979,71 @@ static bool ci18n_load_from_buffer_impl(ci18n_t *ctx, const char *language_code,
     ci18n_language_shrink(lang);
     return ci18n_finish_load(ctx);
 }
+#ifndef CI18N_NO_COMPILED
+static bool ci18n_use_compiled_impl(ci18n_t *ctx, const char *language_code,
+                                    const ci18n_compiled_t *compiled)
+{
+    ci18n_language_t *lang;
+
+    if (!ctx->initialized)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!language_code || !compiled)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    if (!ci18n_code_fits(language_code))
+    {
+        return ci18n_fail(ctx, CI18N_ERR_CODE_TOO_LONG);
+    }
+
+    /* Generated by another version, whose layout this one cannot read. */
+    if (compiled->format != CI18N_COMPILED_FORMAT)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_PARSE);
+    }
+
+    lang = ci18n_get_or_create_language(ctx, language_code);
+    if (!lang)
+    {
+        return false;
+    }
+
+    /* Whatever was loaded before goes: the language is the compiled one now. */
+    {
+        char code[CI18N_MAX_CODE_LENGTH];
+
+        ci18n_copy(code, sizeof(code), lang->code);
+        ci18n_lang_release(lang);
+        ci18n_copy(lang->code, sizeof(lang->code), code);
+    }
+    lang->compiled = compiled;
+
+    ci18n_succeed(ctx);
+    return true;
+}
+
+CI18N_DEF bool ci18n_use_compiled_in(ci18n_t *catalog, const char *language_code,
+                                     const ci18n_compiled_t *compiled)
+{
+    bool result;
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_use_compiled_impl(catalog, language_code, compiled);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_use_compiled(const char *language_code, const ci18n_compiled_t *compiled)
+{
+    return ci18n_use_compiled_in(&ci18n_ctx, language_code, compiled);
+}
+#endif
+
 CI18N_DEF bool ci18n_load_from_buffer(const char *language_code, const char *buffer, size_t length)
 {
     bool result;
@@ -3113,6 +3339,11 @@ static bool ci18n_load_mo_from_buffer_impl(ci18n_t *ctx, const char *language_co
         return false; /* get_or_create already recorded why */
     }
 
+    if (!ci18n_writable(ctx, lang))
+    {
+        return false;
+    }
+
     ci18n_reset_load_stats(ctx);
 
     /* The header is the entry with an empty msgid. msgfmt sorts it first,
@@ -3315,8 +3546,6 @@ CI18N_DEF bool ci18n_set_fallback(const char *language_code)
 static const char *ci18n_get_impl(ci18n_t *ctx, const char *key)
 {
     int lang_idx;
-    ci18n_language_t *lang;
-    int entry_idx;
 
     if (!ctx->initialized)
     {
@@ -3336,12 +3565,12 @@ static const char *ci18n_get_impl(ci18n_t *ctx, const char *key)
         lang_idx = ci18n_find_language(ctx, ctx->current_language);
         if (lang_idx >= 0)
         {
-            lang = &ctx->languages[lang_idx];
-            entry_idx = ci18n_find_entry(lang, key);
-            if (entry_idx >= 0)
+            const char *value = ci18n_lang_value(&ctx->languages[lang_idx], key);
+
+            if (value)
             {
                 ci18n_succeed(ctx);
-                return ci18n_arena_at(&lang->strings, lang->entries[entry_idx].value);
+                return value;
             }
         }
     }
@@ -3352,12 +3581,12 @@ static const char *ci18n_get_impl(ci18n_t *ctx, const char *key)
         lang_idx = ci18n_find_language(ctx, ctx->fallback_language);
         if (lang_idx >= 0)
         {
-            lang = &ctx->languages[lang_idx];
-            entry_idx = ci18n_find_entry(lang, key);
-            if (entry_idx >= 0)
+            const char *value = ci18n_lang_value(&ctx->languages[lang_idx], key);
+
+            if (value)
             {
                 ci18n_succeed(ctx);
-                return ci18n_arena_at(&lang->strings, lang->entries[entry_idx].value);
+                return value;
             }
         }
     }
@@ -3538,6 +3767,11 @@ static bool ci18n_set_impl(ci18n_t *ctx, const char *language_code, const char *
         return false; /* get_or_create already recorded why */
     }
 
+    if (!ci18n_writable(ctx, lang))
+    {
+        return false;
+    }
+
     /* Same clamping the parser applies, so both routes store the same thing. */
     key_len = strlen(key);
     if (key_len > CI18N_MAX_KEY_LENGTH - 1)
@@ -3594,6 +3828,10 @@ static bool ci18n_remove_impl(ci18n_t *ctx, const char *language_code, const cha
     }
 
     lang = &ctx->languages[lang_idx];
+    if (!ci18n_writable(ctx, lang))
+    {
+        return false;
+    }
     entry_idx = ci18n_find_entry(lang, key);
 
     if (entry_idx < 0)
@@ -3653,6 +3891,10 @@ static bool ci18n_clear_impl(ci18n_t *ctx, const char *language_code)
     }
 
     lang = &ctx->languages[lang_idx];
+    if (!ci18n_writable(ctx, lang))
+    {
+        return false;
+    }
 
     /* Clear current/fallback if being cleared */
     if (strcmp(ctx->current_language, language_code) == 0)
@@ -3780,6 +4022,12 @@ static size_t ci18n_count_impl(ci18n_t *ctx, const char *language_code)
     }
 
     ci18n_succeed(ctx);
+#ifndef CI18N_NO_COMPILED
+    if (ctx->languages[lang_idx].compiled)
+    {
+        return ctx->languages[lang_idx].compiled->count;
+    }
+#endif
     return ctx->languages[lang_idx].count;
 }
 CI18N_DEF size_t ci18n_count(const char *language_code)
@@ -3824,6 +4072,23 @@ static size_t ci18n_foreach_impl(ci18n_t *ctx, const char *language_code,
     ci18n_succeed(ctx);
 
     lang = &ctx->languages[lang_idx];
+#ifndef CI18N_NO_COMPILED
+    if (lang->compiled)
+    {
+        const ci18n_compiled_t *c = lang->compiled;
+
+        for (i = 0; i < c->count; i++)
+        {
+            if (!fn(c->strings + c->entries[3u * i], c->strings + c->entries[3u * i + 1u],
+                    user_data))
+            {
+                return i + 1;
+            }
+        }
+        return c->count;
+    }
+#endif
+
     for (i = 0; i < lang->count; i++)
     {
         const ci18n_entry_t *e = &lang->entries[i];
@@ -6147,9 +6412,7 @@ static bool ci18n_plural_key(char *out, size_t capacity, const char *key, const 
  * several before deciding the key is missing. */
 static const char *ci18n_lookup_one(ci18n_t *ctx, const char *code, const char *key)
 {
-    ci18n_language_t *lang;
     int lang_idx;
-    int entry_idx;
 
     lang_idx = ci18n_find_language(ctx, code);
     if (lang_idx < 0)
@@ -6157,11 +6420,7 @@ static const char *ci18n_lookup_one(ci18n_t *ctx, const char *code, const char *
         return NULL;
     }
 
-    lang = &ctx->languages[lang_idx];
-    entry_idx = ci18n_find_entry(lang, key);
-    return (entry_idx >= 0)
-               ? ci18n_arena_at(&lang->strings, lang->entries[entry_idx].value)
-               : NULL;
+    return ci18n_lang_value(&ctx->languages[lang_idx], key);
 }
 
 /* The form of `key` for `count` in one language, with that language's own
@@ -6912,6 +7171,8 @@ CI18N_DEF const char *ci18n_error_string(ci18n_error_t error)
         return "too many formatters";
     case CI18N_ERR_UNKNOWN_FORMATTER:
         return "a translation asked for a formatter that is not registered";
+    case CI18N_ERR_READ_ONLY:
+        return "the language is compiled in and cannot be changed";
     }
 
     return "unknown error";

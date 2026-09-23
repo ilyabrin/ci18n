@@ -88,7 +88,8 @@ package build, and `make uninstall` undoes it.
 | **UTF-8** | Strict validation, character counts, truncation that never splits a character. [UTF-8 helpers](docs/unicode-and-direction.md#utf-8-helpers) |
 | **gettext** | Load `.mo` files directly, or convert `.po` files once. [Coming from gettext](docs/from-gettext.md) |
 | **Libraries and threads** | Independent catalogues, a thread-local mode, and a shared mode whose reads scale with cores. [Catalogues and threads](docs/catalogs-and-threads.md) |
-| **Small** | 27 KB of code at `-Os` with everything in, 14 KB with `CI18N_MINIMAL`, 7 KB on a Cortex-M4. [Embedded and size](docs/embedded-and-size.md) |
+| **Compiled in** | Translations as constant data: no heap, no loading, and `CI18N_KEY(greeting)` makes a mistyped key a compile error. [Compiled catalogues](docs/compiled-catalogs.md) |
+| **Small** | 28 KB of code at `-Os` with everything in, 15 KB with `CI18N_MINIMAL`, 7.6 KB on a Cortex-M4. [Embedded and size](docs/embedded-and-size.md) |
 | **Checked** | Warnings as errors, sanitizers and fuzzing, on Linux, macOS, Windows, the BSDs, iOS, Android, WebAssembly and bare-metal ARM and RISC-V. [Platforms](docs/platforms.md) |
 
 A lookup takes about 24 ns, and glibc's `gettext` about 133 ns on the same

@@ -57,6 +57,12 @@ jobs:
         if: runner.os != 'Windows'
         run: make CC=${{ matrix.compiler }} examples
 
+      # Compiled catalogues: every fixture compiled and loaded, answers
+      # compared, and a mistyped CI18N_KEY refused at compile time.
+      - name: Compiled catalogues (Unix)
+        if: runner.os != 'Windows'
+        run: make CC=${{ matrix.compiler }} test-compiled
+
   # Runs the benchmarks so they keep building and keep working. The numbers a
   # shared runner prints are noise, so nothing here compares them.
   bench:
@@ -124,7 +130,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config: [CI18N_NO_FORMAT, CI18N_NO_NUMBERS, CI18N_NO_ORDINALS,
+        config: [CI18N_NO_FORMAT, CI18N_NO_NUMBERS, CI18N_NO_ORDINALS, CI18N_NO_COMPILED,
                  CI18N_NO_LOCALE, CI18N_NO_MO, CI18N_NO_FILES, CI18N_MINIMAL]
 
     steps:
@@ -461,3 +467,8 @@ jobs:
         run: |
           make clean
           make CC=${{ matrix.compiler }} examples EXTRA_CFLAGS="-Werror $SAN_FLAGS"
+
+      - name: Compiled catalogues
+        run: |
+          make clean
+          make CC=${{ matrix.compiler }} test-compiled EXTRA_CFLAGS="-Werror $SAN_FLAGS"

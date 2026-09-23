@@ -1,0 +1,8 @@
+# Compiled into the firmware by tools/ci18n_compile, see ../README.md.
+title=Настройки
+brightness=Яркость
+battery[one]=Осталась {count} мин
+battery[few]=Осталось {count} мин
+battery[many]=Осталось {count} мин
+update=Готово обновление прошивки, нажмите для установки
+owner=Владелец

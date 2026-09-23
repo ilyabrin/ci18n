@@ -1,0 +1,11 @@
+# Compiled into the firmware by tools/ci18n_compile, see ../README.md.
+# Arabic has six plural categories. This file writes four and lets [other]
+# cover the rest, which the library does for you.
+title=الإعدادات
+brightness=السطوع
+battery[one]=دقيقة واحدة متبقية
+battery[two]=دقيقتان متبقيتان
+battery[few]={count} دقائق متبقية
+battery[other]={count} دقيقة متبقية
+update=تحديث البرنامج الثابت جاهز، انقر للتثبيت
+owner=المالك

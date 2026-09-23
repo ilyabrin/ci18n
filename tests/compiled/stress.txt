@@ -1,0 +1,16 @@
+﻿# Every corner of the format, for the compiled-versus-loaded test.
+greeting=Hello, {name}!
+  spaced   =   trimmed on both sides   
+empty=
+escapes=tab\there\nnew line \\ backslash \= equals
+we\=ird=a key with an equals sign
+\#hash=a key starting with a comment marker
+trailing=keeps one space\ 
+menu.open=Open
+unicode=Привет مرحبا 你好 😀
+duplicate=firstduplicate=second winsfiles[one]={count} filefiles[other]={count} filesplace[one]={count}st
+place[two]={count}nd
+place[few]={count}rd
+place[other]={count}th
+bare=no forms at all
+; also a comment

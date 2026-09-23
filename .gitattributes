@@ -9,6 +9,10 @@
 # The last matching line wins, so this has to come after the rule above.
 tests/fuzz_corpus/** -text -diff
 
+# Written byte for byte by tests/compiled/make_stress.py: a BOM, CRLF and lone
+# CRs that a checkout must not normalise away.
+tests/compiled/stress.txt -text
+
 # Generated from CLDR by tools/cldr_samples.py. Folded in pull request diffs,
 # but still diffable, since reading the diff is how a CLDR update is reviewed.
 tests/cldr_samples.h linguist-generated=true

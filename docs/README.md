@@ -10,6 +10,7 @@ program needs next.
 | [Formatting](formatting.md) | Put names, counts, dates and numbers into translations |
 | [Unicode and text direction](unicode-and-direction.md) | Count and cut UTF-8, support Arabic and Hebrew, mix directions |
 | [Catalogues and threads](catalogs-and-threads.md) | Use ci18n inside a library, or from several threads |
+| [Compiled catalogues](compiled-catalogs.md) | Build translations into the program: no heap, no loading, checked keys |
 | [Embedded and size](embedded-and-size.md) | Make it smaller, set limits, run it on a microcontroller |
 | [Coming from gettext](from-gettext.md) | Load `.mo` files, or convert `.po` files once |
 | [API reference](api.md) | Find a function, or an error code |

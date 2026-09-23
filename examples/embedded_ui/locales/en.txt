@@ -1,0 +1,7 @@
+# Compiled into the firmware by tools/ci18n_compile, see ../README.md.
+title=Settings
+brightness=Brightness
+battery[one]={count} min left
+battery[other]={count} mins left
+update=Firmware update ready, tap to install
+owner=Owner

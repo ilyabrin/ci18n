@@ -38,7 +38,7 @@ jobs:
       - name: Tests, threads, examples
         run: |
           make CC=cc
-          make CC=cc test-threads test-shared examples
+          make CC=cc test-threads test-shared examples test-compiled
 
   windows-arm64:
     name: Windows ARM64 / MSVC
@@ -82,7 +82,7 @@ jobs:
           prepare: pkg install -y gmake
           run: |
             gmake CC=cc EXTRA_CFLAGS=-Werror
-            gmake CC=cc EXTRA_CFLAGS=-Werror test-threads test-shared examples
+            gmake CC=cc EXTRA_CFLAGS=-Werror test-threads test-shared examples test-compiled
 
   openbsd:
     name: OpenBSD
@@ -97,7 +97,7 @@ jobs:
           prepare: pkg_add gmake
           run: |
             gmake CC=cc EXTRA_CFLAGS=-Werror
-            gmake CC=cc EXTRA_CFLAGS=-Werror test-threads test-shared examples
+            gmake CC=cc EXTRA_CFLAGS=-Werror test-threads test-shared examples test-compiled
 
   netbsd:
     name: NetBSD
@@ -112,7 +112,7 @@ jobs:
           prepare: /usr/sbin/pkg_add gmake
           run: |
             gmake CC=cc EXTRA_CFLAGS=-Werror
-            gmake CC=cc EXTRA_CFLAGS=-Werror test-threads test-shared examples
+            gmake CC=cc EXTRA_CFLAGS=-Werror test-threads test-shared examples test-compiled
 
   # musl instead of glibc, and old compilers, each in a container. Run through
   # docker directly: JavaScript actions do not run inside an Alpine container.
@@ -145,7 +145,7 @@ jobs:
             set -e
             ${{ matrix.setup }}
             make CC=${{ matrix.cc }} EXTRA_CFLAGS=-Werror
-            make CC=${{ matrix.cc }} EXTRA_CFLAGS=-Werror test-threads test-shared examples'
+            make CC=${{ matrix.cc }} EXTRA_CFLAGS=-Werror test-threads test-shared examples test-compiled'
 
   # size_t of 4 bytes, which is where offset arithmetic goes wrong.
   linux-32:
@@ -161,7 +161,7 @@ jobs:
       - name: Tests, threads, examples
         run: |
           make EXTRA_CFLAGS="-Werror -m32"
-          make EXTRA_CFLAGS="-Werror -m32" test-threads test-shared examples
+          make EXTRA_CFLAGS="-Werror -m32" test-threads test-shared examples test-compiled
 
   # Emulated CPUs. s390x is the big-endian one, which is the real test for
   # the .mo loader and the hashes; armv7 and riscv64 are embedded Linux.
@@ -176,6 +176,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Compiled catalogues generated here, on x86-64, and used there: the
+      # generated data has to mean the same thing on any byte order.
+      - name: Generate catalogues on the host
+        run: |
+          mkdir -p build/host
+          cc -std=c99 -Iinclude -o host_compile tools/ci18n_compile.c
+          ./host_compile -o build/host/stress.h stress tests/compiled/stress.txt
+          ./host_compile -o build/host/tr_en.h tr_en translations/en.txt
+          ./host_compile -o build/host/tr_ru.h tr_ru translations/ru.txt
+          ./host_compile -o build/host/tr_es.h tr_es translations/es.txt
+          ./host_compile -o build/host/sync_ru.h sync_ru examples/cli_sync/locales/ru.txt
+
       - uses: uraimo/run-on-arch-action@v3
         with:
           arch: ${{ matrix.arch }}
@@ -185,7 +197,10 @@ jobs:
             apt-get install -q -y gcc make diffutils python3 gettext
           run: |
             make EXTRA_CFLAGS=-Werror
-            make EXTRA_CFLAGS=-Werror test-threads test-shared examples test-mo
+            make EXTRA_CFLAGS=-Werror test-threads test-shared examples test-mo test-compiled
+            gcc -std=c99 -Wall -Wextra -Werror -Iinclude -Ibuild/host \
+              -o test_compiled_from_host tests/test_compiled.c
+            ./test_compiled_from_host
 
   # Microcontrollers. The tests run bare metal: Cortex-M3 with newlib under
   # qemu-arm, and RV32 with picolibc on QEMU's virt board, the class of an
@@ -239,19 +254,24 @@ jobs:
 
       - name: Code size of the embedded example
         run: |
+          mkdir -p build/ui
+          cc -std=c99 -Iinclude -o host_compile tools/ci18n_compile.c
+          for l in en ru ar; do
+            ./host_compile -o build/ui/$l.h $l examples/embedded_ui/locales/$l.txt
+          done
           {
             echo "| Target | Code | Data | BSS |"
             echo "| --- | ---: | ---: | ---: |"
             for cpu in cortex-m0plus cortex-m4 cortex-m7; do
               arm-none-eabi-gcc -mcpu=$cpu -mthumb -Os -std=c99 -Wall -Wextra -Werror \
                 -ffunction-sections -fdata-sections -Wl,--gc-sections \
-                --specs=nano.specs --specs=nosys.specs -Iinclude \
+                --specs=nano.specs --specs=nosys.specs -Iinclude -Ibuild/ui \
                 -o ui_$cpu.elf examples/embedded_ui/ui.c 2>/dev/null
               arm-none-eabi-size ui_$cpu.elf | awk -v t=$cpu 'NR==2 {print "| " t " | " $1 " | " $2 " | " $3 " |"}'
             done
             riscv64-unknown-elf-gcc -march=rv32imc -mabi=ilp32 -Os -std=c99 -Wall -Wextra -Werror \
               -ffunction-sections -fdata-sections -Wl,--gc-sections \
-              --specs=picolibc.specs --oslib=semihost -Iinclude \
+              --specs=picolibc.specs --oslib=semihost -Iinclude -Ibuild/ui \
               -o ui_rv32.elf examples/embedded_ui/ui.c
             riscv64-unknown-elf-size ui_rv32.elf | awk 'NR==2 {print "| rv32imc | " $1 " | " $2 " | " $3 " |"}'
             # tests/minimal.c with everything in and with CI18N_MINIMAL,
@@ -324,5 +344,10 @@ jobs:
         run: |
           emcc -std=c99 -Wall -Wextra -Werror -Iinclude -sNODERAWFS=1 -o t.js tests/test_ci18n.c
           node t.js
-          emcc -std=c99 -Wall -Wextra -Werror -Iinclude -sNODERAWFS=1 -o ui.js examples/embedded_ui/ui.c
+          mkdir -p build/ui
+          cc -std=c99 -Iinclude -o host_compile tools/ci18n_compile.c
+          for l in en ru ar; do
+            ./host_compile -o build/ui/$l.h $l examples/embedded_ui/locales/$l.txt
+          done
+          emcc -std=c99 -Wall -Wextra -Werror -Iinclude -Ibuild/ui -sNODERAWFS=1 -o ui.js examples/embedded_ui/ui.c
           node ui.js | diff -u examples/embedded_ui/expected.txt -

@@ -162,7 +162,9 @@ puts(greeting);                           /* dangling */
 `ci18n_set()`, `ci18n_remove()` and the loaders may reallocate the entry array.
 `ci18n_clear()`, `ci18n_free()` and `ci18n_set_current()` invalidate pointers
 outright. Read a translation right before you use it, which is cheap, or copy
-it with `ci18n_get_copy()` if you need to hold on to it. With threads, always
+it with `ci18n_get_copy()` if you need to hold on to it. A string from a
+[compiled language](compiled-catalogs.md) is the exception: it lives as long
+as the program. With threads, always
 copy; see [Catalogues and threads](catalogs-and-threads.md#the-shared-mode).
 
 ## Version check

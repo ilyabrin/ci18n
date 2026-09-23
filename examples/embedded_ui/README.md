@@ -1,11 +1,20 @@
 # A settings screen on a small device
 
-A 20 by 4 character display in English, Russian and Arabic, then in French
-from a language pack received at run time.
+A 20 by 4 character display in English, Russian and Arabic, compiled into
+the firmware, then in French from a language pack received at run time.
 
 ```sh
 make examples        # builds it as ./example_ui with -Os, among others
 ./example_ui
+```
+
+The three built-in languages are [locales/](locales/)`*.txt`, turned into
+headers by [tools/ci18n_compile](../../tools/ci18n_compile.c) as part of the
+build. By hand:
+
+```sh
+cc -Iinclude -o ci18n_compile tools/ci18n_compile.c
+./ci18n_compile -o en.h en examples/embedded_ui/locales/en.txt   # and ru, ar
 ```
 
 ```
@@ -30,19 +39,29 @@ ar, rtl
 | Feature | Where |
 | --- | --- |
 | Limits sized to the product, set before the include | top of `ui.c` |
-| Translations compiled in, loaded from buffers | `main` |
+| Translations compiled in: `ci18n_use_compiled`, no heap | `main`, [locales/](locales/) |
+| A compiled language as the fallback for a loaded one | the French screen |
 | A pack from outside checked with `ci18n_utf8_valid` before loading | `install_pack` |
 | Keys the pack lacks, filled from the fallback | the French screen |
 | Fitting text to columns: `ci18n_utf8_length`, `ci18n_utf8_sequence_length` | `fit` |
 | A string in a 16-byte slot, cut with `ci18n_utf8_truncate` | `store_owner` |
 | Mirrored layout for right-to-left: `ci18n_current_direction` | `row`, `draw` |
-| Arabic writing four of its six plural forms, the rest from `[other]` | `AR` |
+| Arabic writing four of its six plural forms, the rest from `[other]` | [locales/ar.txt](locales/ar.txt) |
 
 ## Size
 
-With the limits in `ui.c` the whole context is under 600 bytes of RAM before
-any translation is loaded; the program prints the figure on stderr. The
-library adds 18 to 19 KB of code at `-Os`.
+With the limits in `ui.c` the whole context is about 600 bytes of RAM; the
+program prints the figure on stderr. Compiling the translations in, measured
+on a Cortex-M4 with `-Os` and `--gc-sections`:
+
+| | Loaded from buffers | Compiled |
+| --- | --- | --- |
+| Heap for the three languages | 3 232 bytes | none |
+| Flash, the whole program | 21 053 bytes | 21 673 bytes |
+
+The translations are 803 bytes of text, and cost four times that in RAM once
+loaded, for entry arrays, hash buckets and spare room. Compiled, they cost
+nothing in RAM and 620 bytes more flash for their hash tables.
 
 ## Worth knowing
 

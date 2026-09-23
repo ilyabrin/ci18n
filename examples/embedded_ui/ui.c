@@ -5,8 +5,9 @@
  * What a small device needs from an i18n library, and how to get it here:
  *
  *   - Limits sized to the product, set before the include.
- *   - Translations compiled into the firmware, loaded from buffers.
- *   - A language pack received at run time, checked before it is trusted.
+ *   - Translations compiled into the firmware: no heap, no parsing at boot.
+ *   - A language pack received at run time, checked before it is trusted,
+ *     living beside the compiled ones.
  *   - Text fitted to a fixed number of columns, by characters, not bytes.
  *   - A string stored in a fixed-size byte slot, cut without splitting a
  *     character.
@@ -33,36 +34,15 @@
 
 /* ------------------------------------------------------------------------
  * Translations in flash
+ *
+ * locales/en.txt, ru.txt and ar.txt, compiled by tools/ci18n_compile into
+ * constant data: no parsing at boot, and no RAM spent on them at all. The
+ * build writes these headers; see the README.
  * ------------------------------------------------------------------------ */
 
-static const char EN[] =
-    "title=Settings\n"
-    "brightness=Brightness\n"
-    "battery[one]={count} min left\n"
-    "battery[other]={count} mins left\n"
-    "update=Firmware update ready, tap to install\n"
-    "owner=Owner\n";
-
-static const char RU[] =
-    "title=Настройки\n"
-    "brightness=Яркость\n"
-    "battery[one]=Осталась {count} мин\n"
-    "battery[few]=Осталось {count} мин\n"
-    "battery[many]=Осталось {count} мин\n"
-    "update=Готово обновление прошивки, нажмите для установки\n"
-    "owner=Владелец\n";
-
-/* Arabic has six plural categories. This file writes four and lets
- * [other] cover the rest, which the library does for you. */
-static const char AR[] =
-    "title=الإعدادات\n"
-    "brightness=السطوع\n"
-    "battery[one]=دقيقة واحدة متبقية\n"
-    "battery[two]=دقيقتان متبقيتان\n"
-    "battery[few]={count} دقائق متبقية\n"
-    "battery[other]={count} دقيقة متبقية\n"
-    "update=تحديث البرنامج الثابت جاهز، انقر للتثبيت\n"
-    "owner=المالك\n";
+#include "en.h"
+#include "ru.h"
+#include "ar.h"
 
 /* ------------------------------------------------------------------------
  * Fitting text to the display
@@ -204,9 +184,10 @@ int main(void)
     }
     fprintf(stderr, "context: %u bytes of RAM\n", (unsigned)sizeof(ci18n_context_t));
 
-    ci18n_load_from_buffer("en", EN, strlen(EN));
-    ci18n_load_from_buffer("ru", RU, strlen(RU));
-    ci18n_load_from_buffer("ar", AR, strlen(AR));
+    /* Each call records a pointer; nothing is copied. */
+    ci18n_use_compiled("en", &ci18n_compiled_en);
+    ci18n_use_compiled("ru", &ci18n_compiled_ru);
+    ci18n_use_compiled("ar", &ci18n_compiled_ar);
     ci18n_set_fallback("en");
 
     draw("en");
@@ -217,7 +198,7 @@ int main(void)
     install_pack("fr", fr_pack, strlen(fr_pack));
 
     /* A pack with two keys still gives a full screen: the rest falls back
-     * to English. */
+     * to English, a compiled language behind a loaded one. */
     draw("fr");
 
     store_owner("Александра Петровна");

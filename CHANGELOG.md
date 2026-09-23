@@ -15,6 +15,35 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ## Unreleased
 
+### Added
+
+- Compiled catalogues. `tools/ci18n_compile` turns a translation file into
+  constant C data, and `ci18n_use_compiled()` hands it to a catalogue
+  without copying anything: no heap, no parsing at startup, and strings that
+  live as long as the program. On the benchmark catalogue a 1 000-key
+  language goes from 98 KB of heap and 0.19 ms of loading to none, with
+  lookups as fast as before; the embedded example's three languages go from
+  3.2 KB of RAM to none. The generator reads files with the library's own
+  loader and fails the build on anything the loader would drop. Compiled
+  and loaded languages mix in one catalogue. `CI18N_NO_COMPILED` leaves it
+  out, about 0.4 KB on a Cortex-M4.
+- `CI18N_KEY(name)` makes a mistyped key a compile error, from the key
+  macros the generator writes; `--keys-only` writes just those, for
+  languages loaded at run time.
+- `ci18n_compile_translations()` for CMake, available as a subproject and
+  from an installed package, which now ships the generator's source.
+- `CI18N_ERR_READ_ONLY`, for a write to a compiled language.
+
+### Fixed
+
+- The sample translations had a line break where `\n` was meant, since
+  the escapes were added, so their `multiline` entry lost its second line
+  and the loader quietly dropped it as malformed. The generator refused the
+  file, which is how it was found.
+- The implementation could not be included twice in one file: a second
+  `#include "ci18n.h"` after `CI18N_IMPLEMENTATION`, directly or through
+  another header, redefined everything. It now has a guard of its own.
+
 ### Documentation
 
 - The English documentation is reorganised for someone arriving new. The

@@ -4,4 +4,9 @@
 # interface target and nothing to link.
 include("${CMAKE_CURRENT_LIST_DIR}/ci18nTargets.cmake")
 
+# ci18n_compile_translations(), building the generator from the source
+# installed alongside, with whatever compiler the consumer uses.
+set(CI18N_COMPILE_SOURCE "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_DATADIR@/ci18n/ci18n_compile.c")
+include("${CMAKE_CURRENT_LIST_DIR}/ci18nCompile.cmake")
+
 check_required_components(ci18n)

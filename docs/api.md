@@ -39,6 +39,8 @@ The last column names the macro that leaves a function out, if any; see
 | `ci18n_load_from_buffer(code, text, len)` | The same, from memory | |
 | `ci18n_load_mo(code, path)` | Load a gettext `.mo` file | `NO_MO`, `NO_FILES` |
 | `ci18n_load_mo_from_buffer(code, data, len)` | The same, from memory | `NO_MO` |
+| `ci18n_use_compiled(code, &compiled)` | Use a language built by `tools/ci18n_compile`; copies nothing | `NO_COMPILED` |
+| `CI18N_KEY(name)` | The key as a string, a compile error if the generated keys lack it | |
 
 ## Choosing a language
 
@@ -152,3 +154,4 @@ into text.
 | `CI18N_ERR_PARSE` | A load dropped or cut something, or a file is not the format asked for |
 | `CI18N_ERR_TOO_MANY_FORMATTERS` | `CI18N_MAX_FORMATTERS` reached |
 | `CI18N_ERR_UNKNOWN_FORMATTER` | A translation asked for a formatter nobody registered |
+| `CI18N_ERR_READ_ONLY` | The language is compiled in and cannot be changed |

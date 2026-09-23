@@ -1,0 +1,2 @@
+# Compiled into compiled_consumer by ci18n_compile_translations().
+greeting=Hello from a compiled catalogue

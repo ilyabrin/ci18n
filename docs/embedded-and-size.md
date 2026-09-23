@@ -17,8 +17,8 @@ Code and constant data of the implementation, measured with gcc:
 
 | Build | x86-64 `-O2` | x86-64 `-Os` | Cortex-M4 `-Os` |
 | --- | --- | --- | --- |
-| Everything | 38 KB | 27 KB | 13 KB |
-| `CI18N_MINIMAL` | 21 KB | 14 KB | 7 KB |
+| Everything | 40 KB | 28 KB | 13.6 KB |
+| `CI18N_MINIMAL` | 22 KB | 15 KB | 7.6 KB |
 
 The header itself is 208 KB of source, most of it comments, and is compiled
 in one file only.
@@ -37,7 +37,8 @@ error rather than a surprise at run time:
 | `CI18N_NO_NUMBERS` | `ci18n_format_number` and `{n:number}` | 2.2 / 1.4 KB |
 | `CI18N_NO_FILES` | every loader that opens a file | 1.2 / 0.4 KB |
 | `CI18N_NO_LOCALE` | `ci18n_detect_locale`, `ci18n_set_current_best` | 0.7 / 0.4 KB |
-| `CI18N_MINIMAL` | all of the above | 13 / 6.0 KB, about half |
+| `CI18N_NO_COMPILED` | `ci18n_use_compiled`, [compiled catalogues](compiled-catalogs.md) | 0.8 / 0.4 KB |
+| `CI18N_MINIMAL` | all of the above but `CI18N_NO_COMPILED` | 13 / 6.0 KB, about half |
 
 ```c
 #define CI18N_MINIMAL
@@ -47,7 +48,8 @@ error rather than a surprise at run time:
 
 What stays in every build: loading from buffers, lookup, plurals, the
 fallback language, catalogues, text direction, the UTF-8 helpers and the
-diagnostics. CI builds and tests each of these on its own, and all together.
+diagnostics. `CI18N_MINIMAL` keeps compiled catalogues, which a small build
+is the most likely to want; add `CI18N_NO_COMPILED` to drop them too. CI builds and tests each of these on its own, and all together.
 
 ## When the linker already does it
 
@@ -121,9 +123,9 @@ strings on the heap and needs `fopen` for its file loaders, and an Uno has
 
 What a device build usually wants:
 
-- **Translations compiled in.** Load them from a `const char[]` with
-  `ci18n_load_from_buffer`, and define `CI18N_NO_FILES` if there is no file
-  system.
+- **Translations compiled in.** [Compiled catalogues](compiled-catalogs.md)
+  cost no RAM at all: three languages on a Cortex-M4 went from 3.2 KB of
+  heap to none. Define `CI18N_NO_FILES` if there is no file system.
 - **Limits sized to the product.** Four languages and a few dozen keys make
   a catalogue of a few hundred bytes.
 - **Text from outside checked first.** `ci18n_utf8_valid` before loading a

@@ -26,7 +26,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples cldr-numbers bench bench-threads bench-gettext examples test-mo
+.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples cldr-numbers bench bench-threads bench-gettext examples test-mo test-compiled
 
 all: example test
 
@@ -148,16 +148,47 @@ bench-gettext: bench/bench_gettext.c
 	$(CC) $(ALL_CFLAGS) $(BENCH_CFLAGS) -o bench_gettext bench/bench_gettext.c
 	./bench_gettext
 
+# Compiled catalogues: the generator, then a test that loads every fixture
+# both ways and demands the same answers, once as is and once in the shared
+# threading mode. Then two things that must fail: a mistyped CI18N_KEY must
+# not compile, and a file the loader would have to drop a line from must not
+# generate.
+COMPILED_DIR = build/compiled
+COMPILE = ./ci18n_compile
+
+test-compiled: tools/ci18n_compile.c tests/test_compiled.c tests/compiled/stress.txt \
+		include/ci18n.h
+	mkdir -p $(COMPILED_DIR)
+	$(CC) $(ALL_CFLAGS) -o ci18n_compile tools/ci18n_compile.c
+	$(COMPILE) -o $(COMPILED_DIR)/stress.h stress tests/compiled/stress.txt
+	$(COMPILE) -o $(COMPILED_DIR)/tr_en.h tr_en translations/en.txt
+	$(COMPILE) -o $(COMPILED_DIR)/tr_ru.h tr_ru translations/ru.txt
+	$(COMPILE) -o $(COMPILED_DIR)/tr_es.h tr_es translations/es.txt
+	$(COMPILE) -o $(COMPILED_DIR)/sync_ru.h sync_ru examples/cli_sync/locales/ru.txt
+	$(CC) $(ALL_CFLAGS) -I$(COMPILED_DIR) -o test_compiled tests/test_compiled.c
+	./test_compiled
+	$(CC) $(ALL_CFLAGS) -I$(COMPILED_DIR) -D_POSIX_C_SOURCE=200809L -DCI18N_THREAD_SHARED \
+		-pthread -o test_compiled_shared tests/test_compiled.c
+	./test_compiled_shared
+	! $(CC) $(ALL_CFLAGS) -I$(COMPILED_DIR) -c -o typo.o tests/compiled/typo.c 2>/dev/null
+	! $(COMPILE) -o $(COMPILED_DIR)/broken.h broken examples/cli_sync/locales/de.txt 2>/dev/null
+	@echo "test-compiled: the mistyped key and the broken file were both refused"
+
 # The three examples in examples/*/, each run and compared with the output it
 # is known to give, so a change that alters what they print cannot slip by.
 # The server needs pthreads. The checker exits 1 on purpose: one of its
 # sample files is broken so there is something to report.
 examples: examples/cli_sync/i18n_check.c examples/server/server.c \
-		examples/embedded_ui/ui.c include/ci18n.h
+		examples/embedded_ui/ui.c include/ci18n.h tools/ci18n_compile.c
 	$(CC) $(ALL_CFLAGS) -o example_cli_sync examples/cli_sync/i18n_check.c
 	$(CC) $(ALL_CFLAGS) -D_POSIX_C_SOURCE=200809L -pthread \
 		-o example_server examples/server/server.c
-	$(CC) $(ALL_CFLAGS) -Os -o example_ui examples/embedded_ui/ui.c
+	mkdir -p $(COMPILED_DIR)/ui
+	$(CC) $(ALL_CFLAGS) -o ci18n_compile tools/ci18n_compile.c
+	for l in en ru ar; do \
+		$(COMPILE) -o $(COMPILED_DIR)/ui/$$l.h $$l examples/embedded_ui/locales/$$l.txt || exit 1; \
+	done
+	$(CC) $(ALL_CFLAGS) -Os -I$(COMPILED_DIR)/ui -o example_ui examples/embedded_ui/ui.c
 	./example_cli_sync examples/cli_sync/locales/en.txt \
 		examples/cli_sync/locales/ru.txt examples/cli_sync/locales/de.txt \
 		> example_cli_sync.out; test $$? -eq 1
@@ -215,4 +246,7 @@ clean:
 		bench_gettext bench_gettext.exe \
 		example_cli_sync example_cli_sync.exe example_cli_sync.out \
 		example_server example_server.exe example_server.out \
-		example_ui example_ui.exe example_ui.out
+		example_ui example_ui.exe example_ui.out \
+		ci18n_compile ci18n_compile.exe test_compiled test_compiled.exe \
+		test_compiled_shared test_compiled_shared.exe typo.o
+	$(RM) -r build/compiled

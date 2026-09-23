@@ -47,6 +47,9 @@ example_cli_sync
 example_server
 example_ui
 example_*.out
+ci18n_compile
+test_compiled
+test_compiled_shared
 
 # Fuzzing output. tests/fuzz_corpus holds the committed seeds and stays.
 fuzz_findings/

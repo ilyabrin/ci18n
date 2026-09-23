@@ -68,6 +68,11 @@ target_include_directories(ci18n INTERFACE
 # Requires C99, does not force it on the consumer's other targets.
 target_compile_features(ci18n INTERFACE c_std_99)
 
+# ci18n_compile_translations(), for compiled catalogues. Available to a
+# project that adds ci18n as a subproject, and installed for find_package.
+set(CI18N_COMPILE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/tools/ci18n_compile.c")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ci18nCompile.cmake")
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -82,6 +87,19 @@ if(CI18N_BUILD_TESTS)
   # example reads translations/ by relative path, so both run from the source
   # tree rather than the build directory.
   add_test(NAME unit COMMAND test_ci18n WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+  # Compiled catalogues against the same files loaded at run time. Needs the
+  # generator to run here, so not when cross-compiling without a host copy.
+  if(NOT CMAKE_CROSSCOMPILING OR CI18N_COMPILE_EXECUTABLE)
+    add_executable(test_compiled tests/test_compiled.c)
+    target_link_libraries(test_compiled PRIVATE ci18n::ci18n)
+    ci18n_compile_translations(test_compiled stress tests/compiled/stress.txt)
+    ci18n_compile_translations(test_compiled tr_en translations/en.txt)
+    ci18n_compile_translations(test_compiled tr_ru translations/ru.txt)
+    ci18n_compile_translations(test_compiled tr_es translations/es.txt)
+    ci18n_compile_translations(test_compiled sync_ru examples/cli_sync/locales/ru.txt)
+    add_test(NAME compiled COMMAND test_compiled WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  endif()
 
   # Thread-local context tests. The gate is pthreads specifically, not
   # Threads_FOUND: with MSVC that reports success and hands you Win32 threads,
@@ -110,6 +128,10 @@ if(CI18N_BUILD_EXAMPLE)
   # otherwise reads the source in the system code page.
   add_executable(ci18n_example_cli_sync examples/cli_sync/i18n_check.c)
   add_executable(ci18n_example_ui examples/embedded_ui/ui.c)
+  foreach(_lang en ru ar)
+    ci18n_compile_translations(ci18n_example_ui ${_lang}
+      examples/embedded_ui/locales/${_lang}.txt)
+  endforeach()
   set(_ci18n_examples ci18n_example_cli_sync ci18n_example_ui)
 
   # The server includes pthread.h, so the same gate as the thread tests.
@@ -182,6 +204,11 @@ if(CI18N_INSTALL)
 
   install(TARGETS ci18n EXPORT ci18nTargets)
   install(FILES include/ci18n.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+
+  # The generator ships as source, built on first use by the consumer's own
+  # compiler, so one install serves any toolchain.
+  install(FILES tools/ci18n_compile.c DESTINATION "${CMAKE_INSTALL_DATADIR}/ci18n")
+  install(FILES cmake/ci18nCompile.cmake DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/ci18n")
 
   install(EXPORT ci18nTargets
     FILE ci18nTargets.cmake
