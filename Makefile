@@ -24,7 +24,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus
+.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples
 
 all: example test
 
@@ -104,6 +104,12 @@ fuzz-replay: tests/fuzz_load_buffer.c include/ci18n.h
 fuzz-corpus: tests/fuzz_load_buffer.c include/ci18n.h
 	$(CC) $(ALL_CFLAGS) -DCI18N_FUZZ_REPLAY -g -o fuzz_replay tests/fuzz_load_buffer.c
 	@for input in tests/fuzz_corpus/*; do ./fuzz_replay "$$input" || exit 1; done
+
+# Regenerate the CLDR sample table the unit tests check the plural and
+# ordinal rules against. Fetches the release pinned in the script, so it
+# needs a network; the table is committed, so nothing else does.
+cldr-samples:
+	$(PYTHON) tools/cldr_samples.py
 
 # Installation. There is nothing to compile, so this copies one header and
 # generates a pkg-config file next to it.

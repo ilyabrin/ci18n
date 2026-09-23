@@ -163,6 +163,22 @@ Notes that will save you time:
   is global, so a test that skips cleanup will contaminate the next one.
 - The suite exits non-zero if anything fails. That is what CI checks.
 
+### Plural and ordinal rules
+
+The rules come from CLDR, and the tests hold them to it:
+[tests/cldr_samples.h](tests/cldr_samples.h) is every sample number CLDR
+publishes for the supported languages, and `test_rules_match_cldr_samples`
+checks each one. The file is generated, so do not edit it by hand:
+
+```sh
+make cldr-samples   # fetches the pinned CLDR release and regenerates
+```
+
+Adding a language to the cardinal table adds its samples on the next
+regeneration. When CLDR releases, bump `CLDR_VERSION` in
+[tools/cldr_samples.py](tools/cldr_samples.py), regenerate and read the diff:
+a changed sample is a changed rule, and needs a matching change in the header.
+
 ## Code style
 
 Match the file you are editing. The existing style is:

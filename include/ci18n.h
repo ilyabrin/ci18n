@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.9.0
+ * ci18n.h - v2.10.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -12,6 +12,7 @@
  *   - No external dependencies, C99 and newer
  *   - Packed storage: an entry costs 16 bytes, not 4352
  *   - CLDR plural rules, so Russian and Arabic work, not just English
+ *   - CLDR ordinal rules, so 1st, 2nd, 3rd and 11th come out right
  *   - Locale detection with a fallback chain: ru-RU to ru
  *   - Named interpolation, so translations decide where values go
  *   - Text direction, so an Arabic or Hebrew interface lays out correctly
@@ -58,9 +59,9 @@ Second line.
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 9
+#define CI18N_VERSION_MINOR 10
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.9.0"
+#define CI18N_VERSION_STRING "2.10.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -358,6 +359,14 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
         CI18N_ERR_TOO_MANY_FORMATTERS,/* CI18N_MAX_FORMATTERS reached */
         CI18N_ERR_UNKNOWN_FORMATTER  /* a translation asked for one that is not registered */
     } ci18n_error_t;
+
+    /*
+     * The highest error code, so code that walks them all needs no edit when
+     * one is added. A macro rather than a trailing enumerator on purpose: an
+     * enumerator would have to be handled by every exhaustive switch over
+     * ci18n_error_t, forever, despite not being an error.
+     */
+#define CI18N_ERR_LAST CI18N_ERR_UNKNOWN_FORMATTER
 
     /*
      * What the last load actually did. A loader returns true whenever it could
@@ -682,10 +691,13 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
      *
      * Rules come from CLDR and are grouped by family, since most languages
      * share one. Known families cover: English-like one/other, French and
-     * Portuguese where zero is also "one", Russian, Ukrainian and Belarusian,
-     * Polish, Czech and Slovak, Croatian and Serbian, Arabic, Lithuanian,
-     * Latvian, Slovenian, Irish, Romanian, and the languages with no plural
-     * distinction at all such as Japanese, Chinese and Korean.
+     * Portuguese where zero is also "one", the Romance "many" for a whole
+     * number of millions, Russian, Ukrainian and Belarusian,
+     * Polish, Czech and Slovak, Croatian and Serbian, Arabic, Hebrew with its
+     * dual, Lithuanian, Latvian, Slovenian, Irish, Romanian, and the
+     * languages with no plural distinction at all such as Japanese, Chinese
+     * and Korean. Every supported language is checked against CLDR 48 for
+     * every count from 0 to 10000.
      *
      * Matching uses the primary subtag, so "ru-RU" and "ru_RU.UTF-8" both
      * resolve as Russian. An unknown language is treated as English-like,
@@ -730,6 +742,50 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
      * Returns: translation string, or the key if nothing was found
      */
     CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count);
+
+    /*
+     * Which category `count` falls into as an ordinal: first, second, third,
+     * rather than one, two, three.
+     *
+     * Ordinals use the same category names as cardinals but different rules.
+     * English has four forms (1st, 2nd, 3rd, 4th), and 11, 12 and 13 take the
+     * fourth despite ending in 1, 2 and 3. Russian, German, Spanish, Polish
+     * and most others have only "other", because their ordinal is one word
+     * that agrees with its noun rather than one of a few suffixes.
+     *
+     * Rules come from CLDR 48 and are grouped by family. An unknown language
+     * is treated as having no ordinal distinction, which is the commonest
+     * case and the safe one: "other" is a form every translation has.
+     *
+     * Returns: the category for that count
+     */
+    CI18N_DEF ci18n_plural_category_t ci18n_ordinal_category(const char *language_code,
+                                                             long count);
+
+    /*
+     * Get the ordinal form of a key for `count`, in the current language.
+     *
+     * Same three-step lookup as ci18n_plural(), and the same bracket
+     * suffixes, so an ordinal key is just a key used for ordinals:
+     *
+     *   place[one]={count}st place
+     *   place[two]={count}nd place
+     *   place[few]={count}rd place
+     *   place[other]={count}th place
+     *
+     * Keep ordinal and cardinal forms under different keys. "files[one]" and
+     * "place[one]" mean different things, and a key cannot be both.
+     *
+     * Returns: translation string or NULL if none of the three exist
+     */
+    CI18N_DEF const char *ci18n_ordinal(const char *key, long count);
+
+    /*
+     * Same, falling back to the key itself rather than NULL.
+     *
+     * Returns: translation string, or the key if nothing was found
+     */
+    CI18N_DEF const char *ci18n_ordinal_or_key(const char *key, long count);
 
     /* ============================================================================
      * Text direction
@@ -873,6 +929,23 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
      */
     CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key,
                                          long count, ...);
+
+    /*
+     * Pick the ordinal form for `count`, then fill its placeholders.
+     *
+     * The ordinal counterpart of ci18n_format_plural(), with {count}
+     * available in the same way:
+     *
+     *   place[one]={count}st place
+     *   place[other]={count}th place
+     *
+     *   ci18n_format_ordinal(out, sizeof(out), "place", 21, NULL);
+     *   (gives "21st place")
+     *
+     * Returns: as ci18n_format()
+     */
+    CI18N_DEF size_t ci18n_format_ordinal(char *out, size_t capacity, const char *key,
+                                          long count, ...);
 
     /* ============================================================================
      * UTF-8
@@ -1147,6 +1220,10 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
                                      const char *key, ...);
     CI18N_DEF size_t ci18n_format_plural_in(ci18n_t *catalog, char *out, size_t capacity,
                                             const char *key, long count, ...);
+    CI18N_DEF const char *ci18n_ordinal_in(ci18n_t *catalog, const char *key, long count);
+    CI18N_DEF const char *ci18n_ordinal_or_key_in(ci18n_t *catalog, const char *key, long count);
+    CI18N_DEF size_t ci18n_format_ordinal_in(ci18n_t *catalog, char *out, size_t capacity,
+                                             const char *key, long count, ...);
 
     /* Diagnostics for a specific catalogue. In the shared threading mode the
      * plain versions are per-thread, which is what a caller wants; these
@@ -2938,6 +3015,7 @@ CI18N_DEF size_t ci18n_count(const char *language_code)
  * must not call the locking wrappers: these locks are not recursive. */
 static const char *ci18n_get_impl(ci18n_t *ctx, const char *key);
 static const char *ci18n_plural_impl(ci18n_t *ctx, const char *key, long count);
+static const char *ci18n_ordinal_impl(ci18n_t *ctx, const char *key, long count);
 
 /*
  * Writes into the caller's buffer while counting what the whole result would
@@ -3859,6 +3937,75 @@ CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key
     return needed;
 }
 
+CI18N_DEF size_t ci18n_format_ordinal_in(ci18n_t *catalog, char *out, size_t capacity,
+                                         const char *key, long count, ...)
+{
+    va_list args;
+    const char *text;
+    char count_text[24];
+    size_t needed;
+
+    if (capacity > 0 && out)
+    {
+        out[0] = '\0';
+    }
+
+    if (!catalog)
+    {
+        return 0;
+    }
+
+    CI18N_READ_LOCK(catalog);
+
+    text = ci18n_ordinal_impl(catalog, key, count);
+    if (!text)
+    {
+        CI18N_READ_UNLOCK(catalog);
+        return 0;
+    }
+
+    ci18n_render_long(count_text, sizeof(count_text), count);
+
+    va_start(args, count);
+    needed = ci18n_expand_reporting(catalog, out, capacity, text, args, count_text);
+    va_end(args);
+
+    CI18N_READ_UNLOCK(catalog);
+    return needed;
+}
+
+CI18N_DEF size_t ci18n_format_ordinal(char *out, size_t capacity, const char *key,
+                                      long count, ...)
+{
+    va_list args;
+    const char *text;
+    char count_text[24];
+    size_t needed;
+
+    if (capacity > 0 && out)
+    {
+        out[0] = '\0';
+    }
+
+    CI18N_READ_LOCK(&ci18n_ctx);
+
+    text = ci18n_ordinal_impl(&ci18n_ctx, key, count);
+    if (!text)
+    {
+        CI18N_READ_UNLOCK(&ci18n_ctx);
+        return 0;
+    }
+
+    ci18n_render_long(count_text, sizeof(count_text), count);
+
+    va_start(args, count);
+    needed = ci18n_expand_reporting(&ci18n_ctx, out, capacity, text, args, count_text);
+    va_end(args);
+
+    CI18N_READ_UNLOCK(&ci18n_ctx);
+    return needed;
+}
+
 
 /*
  * CLDR groups languages by the plural rule they follow, so the rules live
@@ -3869,7 +4016,9 @@ typedef enum ci18n_plural_family
 {
     CI18N_PF_OTHER_ONLY,  /* ja, zh, ko: no plural distinction at all */
     CI18N_PF_ONE_OTHER,   /* en, de, es: one for exactly 1 */
-    CI18N_PF_ZERO_ONE,    /* fr, pt, hi: 0 counts as one too */
+    CI18N_PF_ZERO_ONE,    /* hi, bn, si: 0 counts as one too */
+    CI18N_PF_FRENCH,      /* fr, pt: 0 counts as one, and whole millions are many */
+    CI18N_PF_ROMANCE,     /* es, it, ca: one for 1, and whole millions are many */
     CI18N_PF_SLAVIC,      /* ru, uk, be */
     CI18N_PF_POLISH,      /* pl */
     CI18N_PF_CZECH,       /* cs, sk */
@@ -3879,7 +4028,8 @@ typedef enum ci18n_plural_family
     CI18N_PF_LATVIAN,     /* lv */
     CI18N_PF_SLOVENIAN,   /* sl */
     CI18N_PF_IRISH,       /* ga */
-    CI18N_PF_ROMANIAN     /* ro */
+    CI18N_PF_ROMANIAN,    /* ro */
+    CI18N_PF_HEBREW       /* he: a dual, so two is its own form */
 } ci18n_plural_family_t;
 
 typedef struct ci18n_plural_rule
@@ -3903,11 +4053,12 @@ static const ci18n_plural_rule_t ci18n_plural_rules[] = {
     {"yo", CI18N_PF_OTHER_ONLY}, {"ig", CI18N_PF_OTHER_ONLY},
 
     /* Zero behaves like one. */
-    {"fr", CI18N_PF_ZERO_ONE}, {"pt", CI18N_PF_ZERO_ONE},
+    {"fr", CI18N_PF_FRENCH}, {"pt", CI18N_PF_FRENCH},
+    {"es", CI18N_PF_ROMANCE}, {"it", CI18N_PF_ROMANCE}, {"ca", CI18N_PF_ROMANCE},
     {"hi", CI18N_PF_ZERO_ONE}, {"bn", CI18N_PF_ZERO_ONE},
     {"fa", CI18N_PF_ZERO_ONE}, {"hy", CI18N_PF_ZERO_ONE},
     {"gu", CI18N_PF_ZERO_ONE}, {"kn", CI18N_PF_ZERO_ONE},
-    {"zu", CI18N_PF_ZERO_ONE}, {"mr", CI18N_PF_ZERO_ONE},
+    {"zu", CI18N_PF_ZERO_ONE},
 
     /* Three forms, east Slavic. */
     {"ru", CI18N_PF_SLAVIC}, {"uk", CI18N_PF_SLAVIC}, {"be", CI18N_PF_SLAVIC},
@@ -3921,6 +4072,7 @@ static const ci18n_plural_rule_t ci18n_plural_rules[] = {
     {"sl", CI18N_PF_SLOVENIAN},
     {"ga", CI18N_PF_IRISH},
     {"ro", CI18N_PF_ROMANIAN},
+    {"he", CI18N_PF_HEBREW}, {"iw", CI18N_PF_HEBREW},
 
     /* One for exactly 1. The default, so these are here for documentation as
      * much as for lookup. */
@@ -3929,18 +4081,18 @@ static const ci18n_plural_rule_t ci18n_plural_rules[] = {
     {"da", CI18N_PF_ONE_OTHER}, {"no", CI18N_PF_ONE_OTHER},
     {"nb", CI18N_PF_ONE_OTHER}, {"nn", CI18N_PF_ONE_OTHER},
     {"fi", CI18N_PF_ONE_OTHER}, {"et", CI18N_PF_ONE_OTHER},
-    {"el", CI18N_PF_ONE_OTHER}, {"es", CI18N_PF_ONE_OTHER},
-    {"it", CI18N_PF_ONE_OTHER}, {"hu", CI18N_PF_ONE_OTHER},
+    {"el", CI18N_PF_ONE_OTHER},
+    {"hu", CI18N_PF_ONE_OTHER},
     {"bg", CI18N_PF_ONE_OTHER}, {"sq", CI18N_PF_ONE_OTHER},
     {"ka", CI18N_PF_ONE_OTHER}, {"eu", CI18N_PF_ONE_OTHER},
     {"tr", CI18N_PF_ONE_OTHER}, {"az", CI18N_PF_ONE_OTHER},
     {"kk", CI18N_PF_ONE_OTHER}, {"uz", CI18N_PF_ONE_OTHER},
     {"ky", CI18N_PF_ONE_OTHER}, {"mn", CI18N_PF_ONE_OTHER},
     {"ne", CI18N_PF_ONE_OTHER}, {"sw", CI18N_PF_ONE_OTHER},
-    {"af", CI18N_PF_ONE_OTHER}, {"he", CI18N_PF_ONE_OTHER},
+    {"af", CI18N_PF_ONE_OTHER}, {"mr", CI18N_PF_ONE_OTHER},
     {"ta", CI18N_PF_ONE_OTHER}, {"te", CI18N_PF_ONE_OTHER},
-    {"ml", CI18N_PF_ONE_OTHER}, {"si", CI18N_PF_ONE_OTHER},
-    {"ur", CI18N_PF_ONE_OTHER}, {"ca", CI18N_PF_ONE_OTHER}
+    {"ml", CI18N_PF_ONE_OTHER}, {"si", CI18N_PF_ZERO_ONE},
+    {"ur", CI18N_PF_ONE_OTHER}
 };
 
 /* Length of the primary subtag, the part before any '-', '_' or '.'. */
@@ -4078,6 +4230,24 @@ CI18N_DEF ci18n_plural_category_t ci18n_plural_category(const char *language_cod
     case CI18N_PF_ZERO_ONE:
         return (n == 0 || n == 1) ? CI18N_PLURAL_ONE : CI18N_PLURAL_OTHER;
 
+    /* A whole number of millions takes its own form in these, because the
+     * noun is joined by a preposition: "1 000 000 de fichiers", not
+     * "1 000 000 fichiers". A translation that never provides [many] still
+     * works, since lookup falls back to [other]. */
+    case CI18N_PF_FRENCH:
+        if (n == 0 || n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        return (n % 1000000 == 0) ? CI18N_PLURAL_MANY : CI18N_PLURAL_OTHER;
+
+    case CI18N_PF_ROMANCE:
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        return (n != 0 && n % 1000000 == 0) ? CI18N_PLURAL_MANY : CI18N_PLURAL_OTHER;
+
     case CI18N_PF_SLAVIC:
         if (mod10 == 1 && mod100 != 11)
         {
@@ -4212,10 +4382,286 @@ CI18N_DEF ci18n_plural_category_t ci18n_plural_category(const char *language_cod
         }
         return CI18N_PLURAL_OTHER;
 
+    case CI18N_PF_HEBREW:
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        return (n == 2) ? CI18N_PLURAL_TWO : CI18N_PLURAL_OTHER;
+
     case CI18N_PF_ONE_OTHER:
     default:
         return (n == 1) ? CI18N_PLURAL_ONE : CI18N_PLURAL_OTHER;
     }
+}
+
+
+/*
+ * Ordinal rules, CLDR 48, grouped the same way as the cardinal ones. Only the
+ * languages that have something other than "other" are listed: everything
+ * else, known or not, takes the default.
+ */
+typedef enum ci18n_ordinal_family
+{
+    CI18N_OF_OTHER_ONLY,  /* ru, de, es, ja, pl and most others */
+    CI18N_OF_FIRST,       /* fr, ga, hy, lo, ms, ro, vi: only 1 differs */
+    CI18N_OF_ENGLISH,     /* en: 1st 2nd 3rd, but 11th 12th 13th */
+    CI18N_OF_SWEDISH,     /* sv */
+    CI18N_OF_ITALIAN,     /* it */
+    CI18N_OF_HUNGARIAN,   /* hu */
+    CI18N_OF_ALBANIAN,    /* sq */
+    CI18N_OF_UKRAINIAN,   /* uk */
+    CI18N_OF_BELARUSIAN,  /* be */
+    CI18N_OF_KAZAKH,      /* kk */
+    CI18N_OF_NEPALI,      /* ne */
+    CI18N_OF_CATALAN,     /* ca */
+    CI18N_OF_HINDI,       /* hi, gu */
+    CI18N_OF_BENGALI,     /* bn */
+    CI18N_OF_MARATHI,     /* mr */
+    CI18N_OF_GEORGIAN,    /* ka */
+    CI18N_OF_AZERBAIJANI  /* az */
+} ci18n_ordinal_family_t;
+
+typedef struct ci18n_ordinal_rule
+{
+    const char *language;
+    ci18n_ordinal_family_t family;
+} ci18n_ordinal_rule_t;
+
+static const ci18n_ordinal_rule_t ci18n_ordinal_rules[] = {
+    {"fr", CI18N_OF_FIRST}, {"ga", CI18N_OF_FIRST}, {"hy", CI18N_OF_FIRST},
+    {"lo", CI18N_OF_FIRST}, {"ms", CI18N_OF_FIRST}, {"ro", CI18N_OF_FIRST},
+    {"vi", CI18N_OF_FIRST},
+
+    {"en", CI18N_OF_ENGLISH},
+    {"sv", CI18N_OF_SWEDISH},
+    {"it", CI18N_OF_ITALIAN},
+    {"hu", CI18N_OF_HUNGARIAN},
+    {"sq", CI18N_OF_ALBANIAN},
+    {"uk", CI18N_OF_UKRAINIAN},
+    {"be", CI18N_OF_BELARUSIAN},
+    {"kk", CI18N_OF_KAZAKH},
+    {"ne", CI18N_OF_NEPALI},
+    {"ca", CI18N_OF_CATALAN},
+    {"hi", CI18N_OF_HINDI}, {"gu", CI18N_OF_HINDI},
+    {"bn", CI18N_OF_BENGALI},
+    {"mr", CI18N_OF_MARATHI},
+    {"ka", CI18N_OF_GEORGIAN},
+    {"az", CI18N_OF_AZERBAIJANI}
+};
+
+static ci18n_ordinal_family_t ci18n_ordinal_family(const char *language_code)
+{
+    size_t len;
+    size_t i;
+
+    if (!language_code)
+    {
+        return CI18N_OF_OTHER_ONLY;
+    }
+
+    len = ci18n_primary_subtag_len(language_code);
+
+    for (i = 0; i < sizeof(ci18n_ordinal_rules) / sizeof(ci18n_ordinal_rules[0]); i++)
+    {
+        if (ci18n_subtag_eq(ci18n_ordinal_rules[i].language, language_code, len))
+        {
+            return ci18n_ordinal_rules[i].family;
+        }
+    }
+
+    return CI18N_OF_OTHER_ONLY;
+}
+
+CI18N_DEF ci18n_plural_category_t ci18n_ordinal_category(const char *language_code, long count)
+{
+    /* As with cardinals, the rules are written for the magnitude. There is
+     * no negative-first place, but a caller passing one gets a sane form. */
+    unsigned long n = (unsigned long)(count < 0 ? -count : count);
+    unsigned long mod10 = n % 10;
+    unsigned long mod100 = n % 100;
+
+    /* No default: every family is handled, and a compiler warning for a
+     * missing case is the check that keeps it that way. */
+    switch (ci18n_ordinal_family(language_code))
+    {
+    case CI18N_OF_OTHER_ONLY:
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_FIRST:
+        return (n == 1) ? CI18N_PLURAL_ONE : CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_ENGLISH:
+        if (mod10 == 1 && mod100 != 11)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (mod10 == 2 && mod100 != 12)
+        {
+            return CI18N_PLURAL_TWO;
+        }
+        if (mod10 == 3 && mod100 != 13)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_SWEDISH:
+        if ((mod10 == 1 || mod10 == 2) && mod100 != 11 && mod100 != 12)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_ITALIAN:
+        if (n == 8 || n == 11 || n == 80 || n == 800)
+        {
+            return CI18N_PLURAL_MANY;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_HUNGARIAN:
+        return (n == 1 || n == 5) ? CI18N_PLURAL_ONE : CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_ALBANIAN:
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (mod10 == 4 && mod100 != 14)
+        {
+            return CI18N_PLURAL_MANY;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_UKRAINIAN:
+        if (mod10 == 3 && mod100 != 13)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_BELARUSIAN:
+        if ((mod10 == 2 || mod10 == 3) && mod100 != 12 && mod100 != 13)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_KAZAKH:
+        /* CLDR writes "n % 10 = 6 or n % 10 = 9 or n % 10 = 0 and n != 0",
+         * where "and" binds tighter than "or". */
+        if (mod10 == 6 || mod10 == 9 || (mod10 == 0 && n != 0))
+        {
+            return CI18N_PLURAL_MANY;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_NEPALI:
+        return (n >= 1 && n <= 4) ? CI18N_PLURAL_ONE : CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_CATALAN:
+        if (n == 1 || n == 3)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (n == 2)
+        {
+            return CI18N_PLURAL_TWO;
+        }
+        if (n == 4)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_HINDI:
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (n == 2 || n == 3)
+        {
+            return CI18N_PLURAL_TWO;
+        }
+        if (n == 4)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        if (n == 6)
+        {
+            return CI18N_PLURAL_MANY;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_BENGALI:
+        /* Hindi's shape, except that 5 and 7 to 10 join 1 as "one". */
+        if (n == 1 || n == 5 || (n >= 7 && n <= 10))
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (n == 2 || n == 3)
+        {
+            return CI18N_PLURAL_TWO;
+        }
+        if (n == 4)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        if (n == 6)
+        {
+            return CI18N_PLURAL_MANY;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_MARATHI:
+        /* Hindi's shape without a form for 6. */
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (n == 2 || n == 3)
+        {
+            return CI18N_PLURAL_TWO;
+        }
+        if (n == 4)
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_GEORGIAN:
+        if (n == 1)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        if (n == 0 || (mod100 >= 2 && mod100 <= 20) ||
+            mod100 == 40 || mod100 == 60 || mod100 == 80)
+        {
+            return CI18N_PLURAL_MANY;
+        }
+        return CI18N_PLURAL_OTHER;
+
+    case CI18N_OF_AZERBAIJANI:
+        if (mod10 == 1 || mod10 == 2 || mod10 == 5 || mod10 == 7 || mod10 == 8 ||
+            mod100 == 20 || mod100 == 50 || mod100 == 70 || mod100 == 80)
+        {
+            return CI18N_PLURAL_ONE;
+        }
+        /* "i % 1000 = 100,200,...,900" is a whole hundred that is not a
+         * whole thousand. */
+        if (mod10 == 3 || mod10 == 4 || (mod100 == 0 && n % 1000 != 0))
+        {
+            return CI18N_PLURAL_FEW;
+        }
+        if (n == 0 || mod10 == 6 || mod100 == 40 || mod100 == 60 || mod100 == 90)
+        {
+            return CI18N_PLURAL_MANY;
+        }
+        return CI18N_PLURAL_OTHER;
+    }
+
+    return CI18N_PLURAL_OTHER;
 }
 
 CI18N_DEF const char *ci18n_plural_category_name(ci18n_plural_category_t category)
@@ -4383,7 +4829,13 @@ static bool ci18n_plural_key(char *out, size_t capacity, const char *key, const 
     return true;
 }
 
-static const char *ci18n_plural_impl(ci18n_t *ctx, const char *key, long count)
+/*
+ * Find the right form of `key` for `count`: key[category], then key[other],
+ * then key itself. Cardinals and ordinals share this and differ only in how
+ * the category is chosen.
+ */
+static const char *ci18n_forms_impl(ci18n_t *ctx, const char *key, long count,
+                                    bool ordinal)
 {
     char buffer[CI18N_MAX_KEY_LENGTH];
     ci18n_plural_category_t category;
@@ -4401,7 +4853,8 @@ static const char *ci18n_plural_impl(ci18n_t *ctx, const char *key, long count)
         return NULL;
     }
 
-    category = ci18n_plural_category(ctx->current_language, count);
+    category = ordinal ? ci18n_ordinal_category(ctx->current_language, count)
+                       : ci18n_plural_category(ctx->current_language, count);
 
     /* The exact form for this count. */
     if (ci18n_plural_key(buffer, sizeof(buffer), key, ci18n_plural_category_name(category)))
@@ -4446,9 +4899,26 @@ CI18N_DEF const char *ci18n_plural(const char *key, long count)
 }
 
 
+static const char *ci18n_plural_impl(ci18n_t *ctx, const char *key, long count)
+{
+    return ci18n_forms_impl(ctx, key, count, false);
+}
+
+static const char *ci18n_ordinal_impl(ci18n_t *ctx, const char *key, long count)
+{
+    return ci18n_forms_impl(ctx, key, count, true);
+}
+
 static const char *ci18n_plural_or_key_impl(ci18n_t *ctx, const char *key, long count)
 {
     const char *result = ci18n_plural_impl(ctx, key, count);
+
+    return result ? result : key;
+}
+
+static const char *ci18n_ordinal_or_key_impl(ci18n_t *ctx, const char *key, long count)
+{
+    const char *result = ci18n_ordinal_impl(ctx, key, count);
 
     return result ? result : key;
 }
@@ -4903,6 +5373,48 @@ CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, 
     CI18N_READ_UNLOCK(catalog);
 
     return result;
+}
+
+CI18N_DEF const char *ci18n_ordinal_in(ci18n_t *catalog, const char *key, long count)
+{
+    const char *result;
+
+    if (!catalog)
+    {
+        return NULL;
+    }
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_ordinal_impl(catalog, key, count);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF const char *ci18n_ordinal_or_key_in(ci18n_t *catalog, const char *key, long count)
+{
+    const char *result;
+
+    if (!catalog)
+    {
+        return key;
+    }
+
+    CI18N_READ_LOCK(catalog);
+    result = ci18n_ordinal_or_key_impl(catalog, key, count);
+    CI18N_READ_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF const char *ci18n_ordinal(const char *key, long count)
+{
+    return ci18n_ordinal_in(&ci18n_ctx, key, count);
+}
+
+CI18N_DEF const char *ci18n_ordinal_or_key(const char *key, long count)
+{
+    return ci18n_ordinal_or_key_in(&ci18n_ctx, key, count);
 }
 
 CI18N_DEF ci18n_error_t ci18n_last_error_in(ci18n_t *catalog)

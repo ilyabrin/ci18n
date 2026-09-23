@@ -13,6 +13,39 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## 2.10.0 - 2026-09-23
+
+### Added
+
+- Ordinals. `ci18n_format_ordinal()`, `ci18n_ordinal()`,
+  `ci18n_ordinal_or_key()` and `ci18n_ordinal_category()`, with `_in`
+  variants, choose between `place[one]`, `place[two]`, `place[few]` and
+  `place[other]` by CLDR 48's ordinal rules: 1st, 2nd, 3rd, 4th, and 11th,
+  12th, 13th. 71 languages, and an unknown one has no ordinal forms, which
+  is what most languages have anyway.
+- `CI18N_ERR_LAST`, the highest error code, so code walking every code needs
+  no edit when one is added. A macro rather than an enumerator, so exhaustive
+  switches over `ci18n_error_t` are not asked to handle something that is not
+  an error.
+- `tools/cldr_samples.py` generates `tests/cldr_samples.h` from CLDR's own
+  sample numbers, and the unit tests check every supported language against
+  it. `make cldr-samples` regenerates it; when CLDR releases, bump the pinned
+  version and read the diff.
+
+### Fixed
+
+Eight languages had cardinal rules that disagreed with CLDR, found by that
+check. A translation that never gave the missing form is unaffected, since
+lookup falls back to `[other]`.
+
+- **Hebrew** has a dual, so 2 is `two`, not `other`. A `key[two]` form was
+  never selected. `iw`, the old code, is covered too.
+- **Marathi**'s 0 is `other`, not `one`.
+- **Sinhala**'s 0 is `one`, not `other`.
+- **French, Portuguese, Spanish, Italian and Catalan** give a whole number of
+  millions its own `many` form: "1 000 000 de fichiers", where "de" is
+  required. It was `other`.
+
 ## 2.9.0 - 2026-09-23
 
 ### Added

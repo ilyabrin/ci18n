@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "cldr_samples.h"
 #include <assert.h>
 
 static int tests_run = 0;
@@ -2148,6 +2150,265 @@ TEST(test_formatter_needs_init)
     ASSERT(ci18n_last_error() == CI18N_ERR_NOT_INITIALIZED);
 }
 
+/* ============================================================================
+ * CLDR conformance
+ * ============================================================================ */
+
+TEST(test_rules_match_cldr_samples)
+{
+    /* Every row is a count CLDR itself publishes as an example of a
+     * category. The table is generated, so this checks the library against
+     * the data rather than against anyone's memory of it. */
+    size_t i;
+    size_t mismatches = 0;
+
+    for (i = 0; i < sizeof(cldr_samples) / sizeof(cldr_samples[0]); i++)
+    {
+        const cldr_sample_t *row = &cldr_samples[i];
+        ci18n_plural_category_t got = (row->kind == CLDR_ORDINAL)
+                                          ? ci18n_ordinal_category(row->language, row->count)
+                                          : ci18n_plural_category(row->language, row->count);
+
+        if (got != row->category)
+        {
+            if (mismatches == 0)
+            {
+                printf("\n");
+            }
+            if (mismatches < 10)
+            {
+                printf("  %s %s %ld: got %s, CLDR %s says %s\n",
+                       row->kind == CLDR_ORDINAL ? "ordinal" : "cardinal",
+                       row->language, row->count, ci18n_plural_category_name(got),
+                       CI18N_CLDR_SAMPLES_VERSION,
+                       ci18n_plural_category_name(row->category));
+            }
+            mismatches++;
+        }
+    }
+
+    if (mismatches > 0)
+    {
+        FAIL("  %u of %u CLDR samples disagree\n", (unsigned)mismatches,
+             (unsigned)(sizeof(cldr_samples) / sizeof(cldr_samples[0])));
+    }
+}
+
+TEST(test_plural_fixes_found_by_cldr)
+{
+    /* Each of these was wrong until the CLDR samples were checked. They are
+     * spelled out here as well so the reason is readable without the table. */
+
+    /* Hebrew has a dual: two days is its own word. */
+    ASSERT(ci18n_plural_category("he", 2) == CI18N_PLURAL_TWO);
+    ASSERT(ci18n_plural_category("he", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("he", 3) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("iw", 2) == CI18N_PLURAL_TWO);
+
+    /* Marathi's zero is not singular; Sinhala's is. */
+    ASSERT(ci18n_plural_category("mr", 0) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("mr", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("si", 0) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("si", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("si", 2) == CI18N_PLURAL_OTHER);
+
+    /* A whole number of millions: "1 000 000 de fichiers". */
+    ASSERT(ci18n_plural_category("fr", 1000000) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("fr", 2000000) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("fr", 1000001) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("fr", 0) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_plural_category("pt", 1000000) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("es", 1000000) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("es", 0) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_plural_category("it", 3000000) == CI18N_PLURAL_MANY);
+    ASSERT(ci18n_plural_category("ca", 1000000) == CI18N_PLURAL_MANY);
+
+    /* And a translation that never gave [many] is unaffected, because the
+     * lookup falls back to [other]. */
+    ci18n_init();
+    ci18n_set("fr", "files[one]", "{count} fichier");
+    ci18n_set("fr", "files[other]", "{count} fichiers");
+    ci18n_set_current("fr");
+    ASSERT_STR_EQ(ci18n_plural("files", 1000000), "{count} fichiers");
+
+    ci18n_set("fr", "files[many]", "{count} de fichiers");
+    ASSERT_STR_EQ(ci18n_plural("files", 1000000), "{count} de fichiers");
+    ASSERT_STR_EQ(ci18n_plural("files", 5), "{count} fichiers");
+    ci18n_free();
+}
+
+/* ============================================================================
+ * Ordinals
+ * ============================================================================ */
+
+TEST(test_ordinal_category_english)
+{
+    ASSERT(ci18n_ordinal_category("en", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_ordinal_category("en", 2) == CI18N_PLURAL_TWO);
+    ASSERT(ci18n_ordinal_category("en", 3) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_ordinal_category("en", 4) == CI18N_PLURAL_OTHER);
+
+    /* The teens take "th" despite ending in 1, 2 and 3... */
+    ASSERT(ci18n_ordinal_category("en", 11) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category("en", 12) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category("en", 13) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category("en", 111) == CI18N_PLURAL_OTHER);
+
+    /* ...and the twenties go back to the pattern. */
+    ASSERT(ci18n_ordinal_category("en", 21) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_ordinal_category("en", 22) == CI18N_PLURAL_TWO);
+    ASSERT(ci18n_ordinal_category("en", 23) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_ordinal_category("en", 101) == CI18N_PLURAL_ONE);
+
+    ASSERT(ci18n_ordinal_category("en", 0) == CI18N_PLURAL_OTHER);
+
+    /* Region, charset and case do not change the rule. */
+    ASSERT(ci18n_ordinal_category("en-GB", 2) == CI18N_PLURAL_TWO);
+    ASSERT(ci18n_ordinal_category("en_US.UTF-8", 3) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_ordinal_category("EN", 1) == CI18N_PLURAL_ONE);
+}
+
+TEST(test_ordinal_category_differs_from_cardinal)
+{
+    /* Russian has three cardinal forms but no ordinal distinction at all,
+     * since its ordinal is a word that agrees with the noun. */
+    ASSERT(ci18n_plural_category("ru", 2) == CI18N_PLURAL_FEW);
+    ASSERT(ci18n_ordinal_category("ru", 2) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category("ru", 1) == CI18N_PLURAL_OTHER);
+
+    /* English has one cardinal distinction but three ordinal ones. */
+    ASSERT(ci18n_plural_category("en", 2) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category("en", 2) == CI18N_PLURAL_TWO);
+
+    /* French marks only the first: 1er, then 2e, 3e. */
+    ASSERT(ci18n_ordinal_category("fr", 1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_ordinal_category("fr", 2) == CI18N_PLURAL_OTHER);
+}
+
+TEST(test_ordinal_category_unknown_language_is_other)
+{
+    /* Other is the form every translation has, so it is the safe guess, and
+     * the English rule is not: most languages have no ordinal forms. */
+    ASSERT(ci18n_ordinal_category("xx", 1) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category("xx", 2) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category("", 3) == CI18N_PLURAL_OTHER);
+    ASSERT(ci18n_ordinal_category(NULL, 1) == CI18N_PLURAL_OTHER);
+
+    /* Negative counts are judged by magnitude, as cardinals are. */
+    ASSERT(ci18n_ordinal_category("en", -1) == CI18N_PLURAL_ONE);
+    ASSERT(ci18n_ordinal_category("en", -11) == CI18N_PLURAL_OTHER);
+}
+
+TEST(test_ordinal_lookup)
+{
+    ci18n_init();
+
+    ci18n_set("en", "place[one]", "{count}st place");
+    ci18n_set("en", "place[two]", "{count}nd place");
+    ci18n_set("en", "place[few]", "{count}rd place");
+    ci18n_set("en", "place[other]", "{count}th place");
+    ci18n_set_current("en");
+
+    ASSERT_STR_EQ(ci18n_ordinal("place", 1), "{count}st place");
+    ASSERT_STR_EQ(ci18n_ordinal("place", 2), "{count}nd place");
+    ASSERT_STR_EQ(ci18n_ordinal("place", 3), "{count}rd place");
+    ASSERT_STR_EQ(ci18n_ordinal("place", 4), "{count}th place");
+    ASSERT_STR_EQ(ci18n_ordinal("place", 11), "{count}th place");
+    ASSERT_STR_EQ(ci18n_ordinal("place", 22), "{count}nd place");
+
+    /* A missing key: NULL from one, the key from the other. */
+    ASSERT(ci18n_ordinal("absent", 1) == NULL);
+    ASSERT(ci18n_last_error() == CI18N_ERR_KEY_NOT_FOUND);
+    ASSERT_STR_EQ(ci18n_ordinal_or_key("absent", 1), "absent");
+
+    ci18n_free();
+}
+
+TEST(test_ordinal_lookup_falls_back_like_plurals)
+{
+    ci18n_init();
+
+    /* Only [other] given, as a German translator would: every count uses it. */
+    ci18n_set("de", "place[other]", "{count}. Platz");
+    ci18n_set_current("de");
+    ASSERT_STR_EQ(ci18n_ordinal("place", 1), "{count}. Platz");
+    ASSERT_STR_EQ(ci18n_ordinal("place", 3), "{count}. Platz");
+
+    /* An English translation that skipped [few] still gets [other]. */
+    ci18n_set("en", "rank[one]", "{count}st");
+    ci18n_set("en", "rank[other]", "{count}th");
+    ci18n_set_current("en");
+    ASSERT_STR_EQ(ci18n_ordinal("rank", 3), "{count}th");
+
+    /* A plain key with no forms at all is the last resort. */
+    ci18n_set("en", "plain", "position {count}");
+    ASSERT_STR_EQ(ci18n_ordinal("plain", 2), "position {count}");
+
+    ci18n_free();
+}
+
+TEST(test_format_ordinal)
+{
+    char out[64];
+    size_t needed;
+
+    ci18n_init();
+    ci18n_set("en", "place[one]", "{count}st place, {who}");
+    ci18n_set("en", "place[two]", "{count}nd place, {who}");
+    ci18n_set("en", "place[few]", "{count}rd place, {who}");
+    ci18n_set("en", "place[other]", "{count}th place, {who}");
+    ci18n_set_current("en");
+
+    ci18n_format_ordinal(out, sizeof(out), "place", 1, "who", "Ada", NULL);
+    ASSERT_STR_EQ(out, "1st place, Ada");
+
+    ci18n_format_ordinal(out, sizeof(out), "place", 12, "who", "Bo", NULL);
+    ASSERT_STR_EQ(out, "12th place, Bo");
+
+    ci18n_format_ordinal(out, sizeof(out), "place", 23, "who", "Cy", NULL);
+    ASSERT_STR_EQ(out, "23rd place, Cy");
+
+    /* Measuring works the same as the other formatting calls. */
+    needed = ci18n_format_ordinal(NULL, 0, "place", 102, "who", "Di", NULL);
+    ASSERT(needed == strlen("102nd place, Di"));
+
+    /* A missing key gives an empty result and says so. */
+    ASSERT(ci18n_format_ordinal(out, sizeof(out), "absent", 1, NULL) == 0);
+    ASSERT_STR_EQ(out, "");
+
+    ci18n_free();
+}
+
+TEST(test_ordinal_in_a_catalogue)
+{
+    ci18n_t *catalog = ci18n_create();
+    char out[64];
+
+    ASSERT(catalog != NULL);
+
+    ci18n_set_in(catalog, "en", "place[one]", "{count}st");
+    ci18n_set_in(catalog, "en", "place[other]", "{count}th");
+    ci18n_set_current_in(catalog, "en");
+
+    ASSERT_STR_EQ(ci18n_ordinal_in(catalog, "place", 21), "{count}st");
+    ASSERT_STR_EQ(ci18n_ordinal_or_key_in(catalog, "absent", 1), "absent");
+
+    ci18n_format_ordinal_in(catalog, out, sizeof(out), "place", 31, NULL);
+    ASSERT_STR_EQ(out, "31st");
+
+    /* The default catalogue never saw any of it. */
+    ci18n_init();
+    ASSERT(ci18n_ordinal("place", 21) == NULL);
+    ci18n_free();
+
+    /* A NULL catalogue answers rather than crashing. */
+    ASSERT(ci18n_ordinal_in(NULL, "place", 1) == NULL);
+    ASSERT_STR_EQ(ci18n_ordinal_or_key_in(NULL, "place", 1), "place");
+    ASSERT(ci18n_format_ordinal_in(NULL, out, sizeof(out), "place", 1, NULL) == 0);
+
+    ci18n_destroy(catalog);
+}
+
 TEST(test_plural_lookup_russian)
 {
     ci18n_init();
@@ -2857,33 +3118,26 @@ TEST(test_detect_locale)
 
 TEST(test_error_string_covers_every_code)
 {
-    /* Every enumerator needs its own text, and nothing may fall through to
-     * the unknown-error catch-all. */
-    ci18n_error_t codes[] = {
-        CI18N_OK,
-        CI18N_ERR_NOT_INITIALIZED,
-        CI18N_ERR_INVALID_ARGUMENT,
-        CI18N_ERR_CODE_TOO_LONG,
-        CI18N_ERR_FILE_NOT_FOUND,
-        CI18N_ERR_OUT_OF_MEMORY,
-        CI18N_ERR_TOO_MANY_LANGUAGES,
-        CI18N_ERR_TOO_MANY_KEYS,
-        CI18N_ERR_LANGUAGE_NOT_FOUND,
-        CI18N_ERR_KEY_NOT_FOUND,
-        CI18N_ERR_PARSE,
-        CI18N_ERR_TOO_MANY_FORMATTERS,
-        CI18N_ERR_UNKNOWN_FORMATTER
-    };
-    size_t i;
+    /* Walks the codes by number rather than by a list, so a new code is
+     * checked the moment it exists. Two halves keep that honest: the build
+     * warns about an enumerator missing from ci18n_error_string's switch,
+     * and the check past the end fails if CI18N_ERR_LAST was not moved. */
+    int code;
 
-    for (i = 0; i < sizeof(codes) / sizeof(codes[0]); i++)
+    for (code = CI18N_OK; code <= CI18N_ERR_LAST; code++)
     {
-        const char *text = ci18n_error_string(codes[i]);
+        const char *text = ci18n_error_string((ci18n_error_t)code);
 
-        ASSERT(text != NULL);
-        ASSERT(strlen(text) > 0);
-        ASSERT(strcmp(text, "unknown error") != 0);
+        if (text == NULL || strlen(text) == 0 || strcmp(text, "unknown error") == 0)
+        {
+            FAIL("  error code %d has no text of its own\n", code);
+        }
     }
+
+    /* One past the last must be unknown. If it is not, a code was added
+     * without moving CI18N_ERR_LAST, and this loop would stop short. */
+    ASSERT_STR_EQ(ci18n_error_string((ci18n_error_t)(CI18N_ERR_LAST + 1)),
+                  "unknown error");
 
     /* Out of range still answers, rather than reading past the switch. */
     ASSERT_STR_EQ(ci18n_error_string((ci18n_error_t)9999), "unknown error");
@@ -3258,6 +3512,16 @@ int main(void)
     RUN_TEST(test_plural_negative_counts);
     RUN_TEST(test_plural_category_names);
     RUN_TEST(test_plural_category_ignores_case);
+    RUN_TEST(test_rules_match_cldr_samples);
+    RUN_TEST(test_plural_fixes_found_by_cldr);
+
+    RUN_TEST(test_ordinal_category_english);
+    RUN_TEST(test_ordinal_category_differs_from_cardinal);
+    RUN_TEST(test_ordinal_category_unknown_language_is_other);
+    RUN_TEST(test_ordinal_lookup);
+    RUN_TEST(test_ordinal_lookup_falls_back_like_plurals);
+    RUN_TEST(test_format_ordinal);
+    RUN_TEST(test_ordinal_in_a_catalogue);
 
     RUN_TEST(test_direction_right_to_left_languages);
     RUN_TEST(test_direction_left_to_right_languages);

@@ -64,10 +64,10 @@ wrong, which is worse than not offering it at all.
 
 ### Not there yet
 
-Planned: per-locale number separators, and ordinal plurals.
+Planned: per-locale number separators.
 
-Text direction arrived in 2.7.0, UTF-8 helpers in 2.8.0, and pluggable
-formatters in 2.9.0. Each has a section of its own below.
+Text direction arrived in 2.7.0, UTF-8 helpers and pluggable formatters in
+2.9.0, and ordinals in 2.10.0. Each has a section of its own below.
 
 ### Which one to pick
 
@@ -317,11 +317,49 @@ why the category comes from CLDR rather than from the caller. Lookup tries
 `key[category]`, then `key[other]`, then plain `key`, so a translation only
 has to be as detailed as it needs to be.
 
-Rules are known for English-like languages, French and Portuguese, Russian,
-Ukrainian and Belarusian, Polish, Czech and Slovak, Croatian and Serbian,
-Arabic, Lithuanian, Latvian, Slovenian, Irish, Romanian, and languages with
-no plural distinction such as Japanese, Chinese and Korean. An unknown
-language is treated as English-like. Only integer counts are considered.
+Rules are known for 71 languages, grouped the way CLDR groups them:
+English-like, French and Portuguese, Russian, Ukrainian and Belarusian,
+Polish, Czech and Slovak, Croatian and Serbian, Arabic, Hebrew with its dual,
+Lithuanian, Latvian, Slovenian, Irish, Romanian, and languages with no plural
+distinction such as Japanese, Chinese and Korean. French, Portuguese,
+Spanish, Italian and Catalan also have a "many" form for a whole number of
+millions, "1 000 000 de fichiers", which a translation can skip since lookup
+falls back to `[other]`. An unknown language is treated as English-like. Only
+integer counts are considered.
+
+Every supported language is checked against CLDR 48 by the unit tests, using
+the sample numbers CLDR publishes next to each rule. See
+[tools/cldr_samples.py](tools/cldr_samples.py).
+
+### Ordinals
+
+First, second, third is a different question from one, two, three, with its
+own rules. English has four ordinal forms, and 11, 12 and 13 take "th" despite
+ending in 1, 2 and 3. Russian, German, Spanish and most others have only one,
+because their ordinal is a word that agrees with its noun rather than a
+suffix.
+
+Ordinal keys use the same brackets as plural keys:
+
+```ini
+place[one]={count}st place
+place[two]={count}nd place
+place[few]={count}rd place
+place[other]={count}th place
+```
+
+```c
+ci18n_format_ordinal(out, sizeof(out), "place", 22, NULL);  /* 22nd place */
+ci18n_format_ordinal(out, sizeof(out), "place", 12, NULL);  /* 12th place */
+```
+
+A German translation writes only `place[other]={count}. Platz`, and every
+count uses it. Keep ordinal and cardinal forms under different keys: `files[one]`
+and `place[one]` mean different things.
+
+`ci18n_ordinal(key, n)` returns the form without filling it, and
+`ci18n_ordinal_category(lang, n)` returns just the category. An unknown
+language has no ordinal forms, since "other" is the one every translation has.
 
 ### Text direction
 
@@ -723,6 +761,10 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_plural_or_key(key, n)`            | Plural form, or the key |
 | `ci18n_plural_category(lang, n)`         | CLDR category for a count |
 | `ci18n_plural_category_name(cat)`        | Category as text      |
+| `ci18n_ordinal(key, n)`                  | Ordinal form: 1st, 2nd, 3rd |
+| `ci18n_ordinal_or_key(key, n)`           | Ordinal form, or the key |
+| `ci18n_ordinal_category(lang, n)`        | CLDR ordinal category |
+| `ci18n_format_ordinal(out, cap, key, n, ...)` | Ordinal form, filled |
 | `ci18n_direction(code)`                  | Which way a language is written |
 | `ci18n_direction_name(dir)`              | Direction as "ltr" or "rtl" |
 | `ci18n_current_direction()`              | Direction of the current language |
@@ -757,7 +799,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.9.0)
+  GIT_TAG v2.10.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)
