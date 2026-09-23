@@ -98,6 +98,31 @@
 в куче, а поиск среди тысячи ключей занимает около 25 нс. До первой записи
 не выделяется ничего.
 
+## Платформы
+
+Каждый пуш собирается с предупреждениями как ошибками и прогоняет
+unit-тесты на каждой из этих платформ. "Только сборка" значит, что в CI
+результат запустить не на чем.
+
+| Платформа | Компиляторы | Тесты запускаются |
+| --- | --- | --- |
+| Linux x86-64, ARM64, 32-битный x86 | gcc, clang, gcc 9, clang 12 | да, плюс санитайзеры и фаззинг |
+| Linux на s390x (big-endian), ARMv7, RISC-V 64 | gcc, в эмуляторе | да |
+| Linux с musl (Alpine) | gcc | да |
+| macOS на Apple silicon и Intel | Apple clang | да |
+| Windows x64 и ARM64 | MSVC, clang-cl, MinGW gcc | да |
+| FreeBSD, OpenBSD, NetBSD | системный cc | да |
+| iOS | Apple clang | да, в симуляторе; для устройства только сборка |
+| Android arm64, armv7, x86-64 | clang из NDK | только сборка |
+| WebAssembly | Emscripten | да, под Node |
+| Cortex-M0+, M3, M4, M7 | arm-none-eabi-gcc, newlib | да на M3, под QEMU |
+| RISC-V 32, класс ESP32-C3 | riscv gcc, picolibc | да, под QEMU |
+
+Самая маленькая цель это 32-битный микроконтроллер с 64 КБ RAM. 8-битные
+AVR, такие как Arduino Uno, не поддерживаются: библиотека держит строки в
+куче и использует `fopen` в загрузчиках файлов, а у Uno 2 КБ RAM.
+См. [.github/workflows/platforms.yml](.github/workflows/platforms.yml).
+
 ## Быстрый старт
 
 Самой маленькой рабочей программе нужны один заголовок и по файлу на язык:

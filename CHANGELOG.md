@@ -13,6 +13,34 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## Unreleased
+
+### Added
+
+- CI on every platform the library claims: Linux on ARM64, 32-bit x86,
+  s390x, ARMv7 and RISC-V 64, musl, gcc 9 and clang 12, macOS on Intel,
+  Windows on ARM64 and with clang-cl, FreeBSD, OpenBSD and NetBSD, iOS on
+  the simulator, Android, WebAssembly, and bare-metal Cortex-M3 and RV32
+  under QEMU. The README lists them under "Platforms".
+
+### Changed
+
+- `ci18n_load_language()` reads the file in blocks and splits lines itself,
+  the same way `ci18n_load_from_buffer()` does, instead of using `fgets()`.
+  A lone CR now ends a line in a file as it already did in a buffer, where a
+  classic Mac file used to load as one line. The line buffer moved from the
+  stack to the heap, which a small device's stack is glad of.
+
+### Fixed
+
+- The last line of a file with no newline at the end was lost under
+  picolibc, the default C library in Zephyr, whose `fgets()` drops a partial
+  last line. Found by running the tests on RV32.
+- The header did not compile with clang-cl and warnings as errors: clang-cl
+  defines `_MSC_VER` but ignores MSVC's warning pragmas, so the Windows CRT
+  deprecation of `fopen` and `getenv` came through. Both compilers are now
+  handled.
+
 ## 2.14.0 - 2026-09-23
 
 ### Added

@@ -1,0 +1,318 @@
+name: Platforms
+
+# Every platform the library claims, beyond the everyday matrix in ci.yml.
+# Each job builds with warnings as errors and runs the unit tests where the
+# platform can run anything; the rest compile only, and say so in their name.
+#
+# The ci/** branches exist so this file can be worked on without a string of
+# red runs on main.
+
+on:
+  push:
+    branches: [main, master, "ci/**"]
+  pull_request:
+    branches: [main, master]
+
+env:
+  EXTRA_CFLAGS: -Werror
+
+jobs:
+  # Real hardware runners.
+  native:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+          - name: macOS Intel
+            os: macos-15-intel
+          - name: macOS ARM64
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tests, threads, examples
+        run: |
+          make CC=cc
+          make CC=cc test-threads test-shared examples
+
+  windows-arm64:
+    name: Windows ARM64 / MSVC
+    runs-on: windows-11-arm
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build and test
+        shell: pwsh
+        run: |
+          cmake -B build -A ARM64 -DCMAKE_C_FLAGS="/W4 /WX"
+          cmake --build build --config Release
+          ctest --test-dir build -C Release --output-on-failure
+
+  clang-cl:
+    name: Windows / clang-cl
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build and test
+        shell: pwsh
+        run: |
+          cmake -B build -T ClangCL -DCMAKE_C_FLAGS="/W4 /WX"
+          cmake --build build --config Release
+          ctest --test-dir build -C Release --output-on-failure
+
+  # The BSDs have their own libc and pthreads, and make is not GNU make.
+  freebsd:
+    name: FreeBSD
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install -y gmake
+          run: |
+            gmake CC=cc EXTRA_CFLAGS=-Werror
+            gmake CC=cc EXTRA_CFLAGS=-Werror test-threads test-shared examples
+
+  openbsd:
+    name: OpenBSD
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: vmactions/openbsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg_add gmake
+          run: |
+            gmake CC=cc EXTRA_CFLAGS=-Werror
+            gmake CC=cc EXTRA_CFLAGS=-Werror test-threads test-shared examples
+
+  netbsd:
+    name: NetBSD
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: vmactions/netbsd-vm@v1
+        with:
+          usesh: true
+          prepare: /usr/sbin/pkg_add gmake
+          run: |
+            gmake CC=cc EXTRA_CFLAGS=-Werror
+            gmake CC=cc EXTRA_CFLAGS=-Werror test-threads test-shared examples
+
+  # musl instead of glibc, and old compilers, each in a container. Run through
+  # docker directly: JavaScript actions do not run inside an Alpine container.
+  containers:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Alpine / musl
+            image: alpine:latest
+            setup: apk add --no-cache build-base
+            cc: gcc
+          - name: gcc 9
+            image: gcc:9
+            setup: "true"
+            cc: gcc
+          - name: clang 12
+            image: ubuntu:22.04
+            setup: apt-get update && apt-get install -y clang-12 make
+            cc: clang-12
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tests, threads, examples
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src ${{ matrix.image }} sh -c '
+            set -e
+            ${{ matrix.setup }}
+            make CC=${{ matrix.cc }} EXTRA_CFLAGS=-Werror
+            make CC=${{ matrix.cc }} EXTRA_CFLAGS=-Werror test-threads test-shared examples'
+
+  # size_t of 4 bytes, which is where offset arithmetic goes wrong.
+  linux-32:
+    name: Linux 32-bit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib make
+
+      - name: Tests, threads, examples
+        run: |
+          make EXTRA_CFLAGS="-Werror -m32"
+          make EXTRA_CFLAGS="-Werror -m32" test-threads test-shared examples
+
+  # Emulated CPUs. s390x is the big-endian one, which is the real test for
+  # the .mo loader and the hashes; armv7 and riscv64 are embedded Linux.
+  emulated:
+    name: ${{ matrix.arch }} (emulated)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [s390x, armv7, riscv64]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: uraimo/run-on-arch-action@v3
+        with:
+          arch: ${{ matrix.arch }}
+          distro: ubuntu22.04
+          install: |
+            apt-get update -q
+            apt-get install -q -y gcc make diffutils python3 gettext
+          run: |
+            make EXTRA_CFLAGS=-Werror
+            make EXTRA_CFLAGS=-Werror test-threads test-shared examples test-mo
+
+  # Microcontrollers. The tests run bare metal: Cortex-M3 with newlib under
+  # qemu-arm, and RV32 with picolibc on QEMU's virt board, the class of an
+  # ESP32-C3. File access goes through semihosting to the host.
+  mcu:
+    name: Microcontrollers (Cortex-M, RV32)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf \
+            qemu-user qemu-system-misc
+
+      - name: Tests on Cortex-M3
+        run: |
+          arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -O2 -std=c99 -Wall -Wextra -Werror \
+            -Iinclude -Itests --specs=rdimon.specs -o tests_m3.elf tests/test_ci18n.c
+          timeout 600 qemu-arm -cpu cortex-m3 ./tests_m3.elf | tee m3.log
+          grep -q "^Failed:  0" m3.log
+
+      # QEMU's virt board has RAM at 0x80000000, so code and data both go
+      # there. The board does not power off when the program ends, and QEMU
+      # holds semihosted output back until it stops, so the output goes to a
+      # file as it is written and QEMU is stopped once the summary is in.
+      - name: Tests on RV32
+        run: |
+          riscv64-unknown-elf-gcc -march=rv32imac -mabi=ilp32 -mcmodel=medany -O2 -std=c99 \
+            -Wall -Wextra -Werror -Iinclude -Itests \
+            --specs=picolibc.specs --oslib=semihost \
+            -Wl,--defsym=__flash=0x80000000 -Wl,--defsym=__flash_size=0x400000 \
+            -Wl,--defsym=__ram=0x80400000 -Wl,--defsym=__ram_size=0x1000000 \
+            -Wl,--defsym=__stack_size=0x10000 \
+            -o tests_rv32.elf tests/test_ci18n.c
+          qemu-system-riscv32 -machine virt -display none -serial none -monitor none \
+            -bios none -m 64M -chardev file,id=out,path=rv32.log \
+            -semihosting-config enable=on,target=native,chardev=out \
+            -kernel tests_rv32.elf &
+          qemu=$!
+          for i in $(seq 600); do
+            grep -q "^Failed:" rv32.log 2>/dev/null && break
+            sleep 1
+          done
+          kill "$qemu" || true
+          cat rv32.log
+          grep -q "^Failed:  0" rv32.log
+
+      - name: Code size of the embedded example
+        run: |
+          {
+            echo "| Target | Code | Data | BSS |"
+            echo "| --- | ---: | ---: | ---: |"
+            for cpu in cortex-m0plus cortex-m4 cortex-m7; do
+              arm-none-eabi-gcc -mcpu=$cpu -mthumb -Os -std=c99 -Wall -Wextra -Werror \
+                -ffunction-sections -fdata-sections -Wl,--gc-sections \
+                --specs=nano.specs --specs=nosys.specs -Iinclude \
+                -o ui_$cpu.elf examples/embedded_ui/ui.c 2>/dev/null
+              arm-none-eabi-size ui_$cpu.elf | awk -v t=$cpu 'NR==2 {print "| " t " | " $1 " | " $2 " | " $3 " |"}'
+            done
+            riscv64-unknown-elf-gcc -march=rv32imc -mabi=ilp32 -Os -std=c99 -Wall -Wextra -Werror \
+              -ffunction-sections -fdata-sections -Wl,--gc-sections \
+              --specs=picolibc.specs --oslib=semihost -Iinclude \
+              -o ui_rv32.elf examples/embedded_ui/ui.c
+            riscv64-unknown-elf-size ui_rv32.elf | awk 'NR==2 {print "| rv32imc | " $1 " | " $2 " | " $3 " |"}'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  android:
+    name: Android NDK (compile only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build for every ABI
+        run: |
+          BIN="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for target in aarch64-linux-android24 armv7a-linux-androideabi24 x86_64-linux-android24; do
+            echo "== $target"
+            CC="$BIN/$target-clang -std=c99 -Wall -Wextra -Werror -Iinclude"
+            $CC -o /tmp/t tests/test_ci18n.c
+            $CC -D_POSIX_C_SOURCE=200809L -pthread -o /tmp/s tests/test_thread_shared.c
+            $CC -D_POSIX_C_SOURCE=200809L -pthread -o /tmp/e examples/server/server.c
+          done
+
+  ios:
+    name: iOS (simulator run, device compile)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build for a device
+        run: |
+          xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=15.0 \
+            -std=c99 -Wall -Wextra -Werror -Iinclude -o test_ios tests/test_ci18n.c
+
+      - name: Run on the simulator
+        run: |
+          xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=15.0 \
+            -std=c99 -Wall -Wextra -Werror -Iinclude -o test_sim tests/test_ci18n.c
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          print(next(d["udid"] for runtime, ds in devices.items() if "iOS" in runtime
+                     for d in ds if d["name"].startswith("iPhone")))')
+          xcrun simctl boot "$UDID"
+          xcrun simctl spawn "$UDID" "$PWD/test_sim" | tee sim.log
+          grep -q "^Failed:  0" sim.log
+
+  wasm:
+    name: WebAssembly (Emscripten, Node)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: mymindstorm/setup-emsdk@v14
+
+      # NODERAWFS gives the program the real file system, which the file
+      # tests and the examples need.
+      - name: Tests and examples
+        run: |
+          emcc -std=c99 -Wall -Wextra -Werror -Iinclude -sNODERAWFS=1 -o t.js tests/test_ci18n.c
+          node t.js
+          emcc -std=c99 -Wall -Wextra -Werror -Iinclude -sNODERAWFS=1 -o ui.js examples/embedded_ui/ui.c
+          node ui.js | diff -u examples/embedded_ui/expected.txt -
