@@ -26,6 +26,58 @@ dropped instead of quietly returning success.
 And if it saves somebody else the same afternoon, that is reason enough to put
 it out here.
 
+## What this does not do
+
+The boundary is deliberate. Knowing where it sits should save you an
+afternoon.
+
+### Not in scope, and not planned
+
+| Not in scope | Use instead |
+| --- | --- |
+| Sorting strings in locale order | ICU |
+| Unicode normalization, NFC and NFD | ICU |
+| Time zones | ICU, or your platform |
+| Date, time and calendar formatting | ICU, or `strftime` |
+| Currency formatting | ICU |
+| Transliteration | ICU |
+| Word and line breaking for languages written without spaces | ICU |
+| Case mapping beyond ASCII, such as Turkish dotless i | ICU |
+| Extracting translatable strings from source code | gettext's `xgettext` |
+
+These are a decision rather than a backlog. Almost all of ICU's tens of
+megabytes are CLDR *data*, not code: patterns for some six hundred locales,
+collation tables, the Unicode character database, normalization tables, the
+timezone database, dictionaries for languages written without spaces.
+Shipping that would end both the single header and the kilobyte of heap
+that a catalogue costs today.
+
+The decisive argument is maintenance rather than size. CLDR releases twice a
+year, and the timezone database changes about ten times a year because
+countries change their minds about daylight saving. A library with one
+maintainer shipping stale timezone or currency data would be confidently
+wrong, which is worse than not offering it at all.
+
+### Not there yet
+
+Planned: text direction for right-to-left languages, per-locale number
+separators, ordinals, and pluggable formatters, so that a `{created:date}`
+placeholder can call a function you supply and the library still needs to
+know nothing about dates.
+
+### Which one to pick
+
+- **ci18n**, if you have up to a few hundred strings, one or two people
+  translating them, and you need strings rather than date and number
+  formatting. Or if size and ease of vendoring matter to you.
+- **gettext**, if you have many strings and separate translators, and you want
+  `xgettext` so that nobody maintains a list of keys by hand.
+- **ICU**, if your interface has dates, numbers, currencies, sorting, or
+  bidirectional text in earnest.
+
+Nothing here is an argument that ci18n is better. It is smaller, and that is a
+different claim.
+
 ## Features
 
 - ✅ Single header file
