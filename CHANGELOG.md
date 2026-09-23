@@ -46,6 +46,11 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 
 ### Documentation
 
+- The Russian documentation matches the English again: README.ru.md is the
+  same landing page, and docs/ru/ translates every page in docs/.
+  `tools/check_docs.py` now compares each pair and fails CI when a
+  translation lacks a section, a code block, a table row, a link or a
+  number the English has, so the two cannot drift apart unnoticed.
 - The English documentation is reorganised for someone arriving new. The
   README is a landing page: a working example first, then installing, a map
   of what the library does, and links. The detail moved, unchanged in

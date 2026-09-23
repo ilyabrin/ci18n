@@ -144,9 +144,11 @@ Bug reports and pull requests are welcome. See
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for how people are expected to behave.
 Release history is in [CHANGELOG.md](CHANGELOG.md).
 
-The English documentation is the canonical one. The Russian README is updated
-on a best-effort basis and currently lags behind, so when the two disagree,
-the English wins.
+The Russian documentation, [README.ru.md](README.ru.md) and
+[docs/ru/](docs/ru/README.md), is a translation of this one, and CI checks
+that the two match in everything a program can compare: sections, code
+examples, tables, links and numbers. Where the prose still disagrees, the
+English is right.
 
 ## License
 

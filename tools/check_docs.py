@@ -2,12 +2,20 @@
 """
 Check the documentation.
 
-    python3 tools/check_docs.py          # links only, no compiler needed
+    python3 tools/check_docs.py          # links and translations, no compiler
     python3 tools/check_docs.py --run    # also build and run the README example
 
 Every relative link in every Markdown file must point at a file that exists,
 and a #fragment at a heading in it, using GitHub's rules for turning headings
 into anchors. External links are not fetched.
+
+Every translated page must match its English original in everything a
+program can compare: the headings, level by level; every code block, byte for
+byte; the shape of every table; where the links go; and every number in the
+text, with 1,4 read as 1.4 and 1 000 as 1000. Prose cannot be checked this
+way, but a translation that dropped a section, a row, a figure or an example
+can. The pairs are README.md with README.ru.md, and docs/X.md with
+docs/ru/X.md; a page on one side only is an error too.
 
 With --run, the "In 30 seconds" example in README.md is compiled exactly as
 written, with its translation file beside it, and every line it prints must
@@ -17,6 +25,7 @@ is the first thing anyone runs, so it is the one that must not go stale.
 SPDX-License-Identifier: MIT
 """
 import argparse
+import collections
 import os
 import re
 import subprocess
@@ -94,6 +103,102 @@ def check_links():
     return problems
 
 
+# ---------------------------------------------------------------- translations
+
+TRANSLATIONS = [('README.md', 'README.ru.md'), ('docs', 'docs/ru')]
+NUMBER = re.compile(r'(?<![\w.])(\d{1,3}(?:[  ]\d{3})+|\d+)(?:[.,](\d+))?(?![\w])')
+
+
+def english_path(path):
+    """The English page a repository path corresponds to."""
+    rel = os.path.relpath(path, ROOT).replace(os.sep, '/')
+    if rel == 'README.ru.md':
+        return 'README.md'
+    if rel.startswith('docs/ru/'):
+        return 'docs/' + rel[len('docs/ru/'):]
+    return rel
+
+
+def outline(path):
+    """What a translation has to keep: headings, code, tables, links, numbers."""
+    headings, code, tables, links, numbers = [], [], [], [], []
+    block = None
+    rows = None
+    with open(path, encoding='utf-8') as f:
+        lines = f.read().split('\n')
+    for line in lines + ['']:
+        if FENCE.match(line):
+            if block is None:
+                block = []
+            else:
+                code.append('\n'.join(block))
+                block = None
+            continue
+        if block is not None:
+            block.append(line)
+            continue
+        if line.startswith('|'):
+            cols = line.count('|') - 1
+            rows = [rows[0] + 1, rows[1]] if rows else [1, cols]
+        elif rows:
+            tables.append(tuple(rows))
+            rows = None
+        m = re.match(r'^(#{1,6})\s', line)
+        if m:
+            headings.append(len(m.group(1)))
+        for target in LINK.findall(line):
+            if re.match(r'^[a-z]+:', target):
+                links.append(target)
+                continue
+            file_part = target.partition('#')[0]
+            dest = path if not file_part else os.path.normpath(
+                os.path.join(os.path.dirname(path), file_part))
+            links.append(english_path(dest))
+        prose = LINK.sub(lambda m: m.group(0).split('](')[0], line)
+        for whole, frac in NUMBER.findall(prose):
+            numbers.append(re.sub(r'[  ]', '', whole) + ('.' + frac if frac else ''))
+    return headings, code, tables, sorted(links), sorted(numbers)
+
+
+def check_translations():
+    problems = []
+    pairs = []
+    for en, ru in TRANSLATIONS:
+        en, ru = os.path.join(ROOT, en), os.path.join(ROOT, ru)
+        if os.path.isdir(en):
+            en_pages = {n for n in os.listdir(en) if n.endswith('.md')}
+            ru_pages = {n for n in os.listdir(ru) if n.endswith('.md')} if os.path.isdir(ru) else set()
+            for n in sorted(en_pages ^ ru_pages):
+                side = 'English' if n in en_pages else 'Russian'
+                problems.append('%s: only the %s side exists' % (n, side))
+            pairs += [(os.path.join(en, n), os.path.join(ru, n)) for n in sorted(en_pages & ru_pages)]
+        else:
+            pairs.append((en, ru))
+
+    names = ('headings', 'code blocks', 'tables', 'links', 'numbers')
+    for en, ru in pairs:
+        a, b = outline(en), outline(ru)
+        where = os.path.relpath(ru, ROOT)
+        for name, x, y in zip(names, a, b):
+            if x == y:
+                continue
+            if name == 'code blocks':
+                for i, (p, q) in enumerate(zip(x, y)):
+                    if p != q:
+                        problems.append('%s: code block %d differs from the English' % (where, i + 1))
+                        break
+                else:
+                    problems.append('%s: %d code blocks, the English has %d' % (where, len(y), len(x)))
+            elif name in ('links', 'numbers'):
+                only_en = sorted((collections.Counter(x) - collections.Counter(y)).elements())
+                only_ru = sorted((collections.Counter(y) - collections.Counter(x)).elements())
+                problems.append('%s: %s differ; English only: %s; Russian only: %s' % (
+                    where, name, only_en[:6], only_ru[:6]))
+            else:
+                problems.append('%s: %s differ: English %s, Russian %s' % (where, name, x, y))
+    return problems, len(pairs)
+
+
 def run_readme_example():
     with open(os.path.join(ROOT, 'README.md'), encoding='utf-8') as f:
         text = f.read()
@@ -131,6 +236,8 @@ def main():
     args = parser.parse_args()
 
     problems = check_links()
+    translation_problems, pairs = check_translations()
+    problems += translation_problems
     if args.run:
         problems += run_readme_example()
 
@@ -138,7 +245,8 @@ def main():
         print(p)
     if problems:
         return 1
-    print('docs ok%s' % (', README example runs' if args.run else ''))
+    print('docs ok: links resolve, %d translated pages match%s' % (
+        pairs, ', README example runs' if args.run else ''))
     return 0
 
 

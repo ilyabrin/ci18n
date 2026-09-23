@@ -221,10 +221,13 @@ the code cannot state itself.
 - A test for anything that touches the parser or the lookup path
 - Public API changes documented in the header, on the page in
   [docs/](docs/) that covers the feature, and in [docs/api.md](docs/api.md)
-- The English docs are canonical. Updating the Russian
-  [README.ru.md](README.ru.md) is welcome but never required
-- `python3 tools/check_docs.py` checks that every link in the docs resolves;
-  CI runs it too
+- The English docs are canonical, and [docs/ru/](docs/ru/) and
+  [README.ru.md](README.ru.md) mirror them. `python3 tools/check_docs.py`
+  checks that every link resolves and that each Russian page matches its
+  English one in sections, code blocks, tables, links and numbers; CI runs
+  it too. So a change to an English page needs the same change on the
+  Russian one. If you do not write Russian, make it there in English: the
+  check passes, and the maintainer translates it
 
 ## Public API changes
 
