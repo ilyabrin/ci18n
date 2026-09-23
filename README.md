@@ -705,13 +705,13 @@ On glibc this mode needs `-D_POSIX_C_SOURCE=200809L`, or `-std=gnu99` instead
 of `-std=c99`, because strict ANSI mode hides the POSIX threading
 declarations. The header says so with an `#error` if you forget.
 
-**Expect the lock to cap throughput, not to scale it.** Readers do not wait
-for each other, but they all update the same lock, and that costs more than
-a lookup does. With `make bench-threads`, one thread does 30 million
-`ci18n_get` calls a second and any number of threads together about 17
-million. For a hot path, copy the strings you need once, or give each thread
-its own catalogue with `ci18n_create()`: each has its own lock, and eight
-threads then do 165 million calls a second between them.
+**Reads scale with cores.** A catalogue holds 16 locks, each on its own
+cache line, and every thread reads through its own one, so readers never
+touch the same memory. With `make bench-threads`, one thread does 27 million
+`ci18n_get` calls a second and eight threads 162 million between them, the
+same as eight separate catalogues. The price is on the writing side: a
+writer takes all 16 locks, so `ci18n_set()` and the loaders cost a little
+more under this mode, which suits "load once, reload rarely".
 
 ### Pointer lifetime
 

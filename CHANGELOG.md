@@ -13,6 +13,16 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## Unreleased
+
+### Changed
+
+- Reads in the shared threading mode scale across cores. A catalogue holds
+  16 read-write locks on separate cache lines, and each thread reads through
+  its own, so eight threads do 162 million `ci18n_get` calls a second instead
+  of 14 million. Writers take all 16 locks, in order. The catalogue struct is
+  about 1 KB larger in this mode, and its `lock` field is now `locks`.
+
 ## 2.11.0 - 2026-09-23
 
 ### Added

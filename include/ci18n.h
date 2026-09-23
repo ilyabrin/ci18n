@@ -287,6 +287,26 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
 #define ci18n_rwlock_write_unlock(l) ci18n_rwlock_read_unlock(l)
 #endif
 
+/*
+ * One lock per catalogue does not scale: every reader writes to the same
+ * lock word, so readers on different cores fight over one cache line even
+ * though they never block each other. The catalogue holds 16 locks instead,
+ * each on its own cache line. A reader takes the one its thread was given,
+ * and a writer takes all of them, in order. Reads get faster with every
+ * core; writes cost 16 lock operations, which a reload can afford.
+ */
+#define CI18N_LOCK_SHARDS 16
+
+typedef union
+{
+    ci18n_rwlock_t lock;
+    char line[(sizeof(ci18n_rwlock_t) + 63) / 64 * 64];
+} ci18n_lock_shard_t;
+
+#define CI18N_SHARD_INIT_ {CI18N_RWLOCK_INIT}
+#define CI18N_SHARD_INIT_4_ CI18N_SHARD_INIT_, CI18N_SHARD_INIT_, CI18N_SHARD_INIT_, CI18N_SHARD_INIT_
+#define CI18N_LOCK_SHARDS_INIT     {CI18N_SHARD_INIT_4_, CI18N_SHARD_INIT_4_, CI18N_SHARD_INIT_4_, CI18N_SHARD_INIT_4_}
+
 #endif /* CI18N_THREAD_SHARED */
 
     /* ============================================================================
@@ -428,7 +448,7 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
 #ifdef CI18N_THREAD_SHARED
         /* Inside the catalogue, not beside the global, so that every
          * catalogue locks itself. */
-        ci18n_rwlock_t lock;
+        ci18n_lock_shard_t locks[CI18N_LOCK_SHARDS];
 #endif
     } ci18n_context_t;
 
@@ -1349,10 +1369,50 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
  * uses them, and the storage for the default catalogue. */
 #ifdef CI18N_THREAD_SHARED
 
-#define CI18N_READ_LOCK(c) ci18n_rwlock_read(&(c)->lock)
-#define CI18N_READ_UNLOCK(c) ci18n_rwlock_read_unlock(&(c)->lock)
-#define CI18N_WRITE_LOCK(c) ci18n_rwlock_write(&(c)->lock)
-#define CI18N_WRITE_UNLOCK(c) ci18n_rwlock_write_unlock(&(c)->lock)
+/*
+ * Which lock shard the calling thread reads through. Threads are numbered
+ * round robin the first time they read, so up to 16 threads never share a
+ * shard. 0 means "not numbered yet", hence the +1. The counter has its own
+ * lock, taken once per thread.
+ */
+static CI18N_THREAD_LOCAL unsigned ci18n_tls_shard;
+static ci18n_rwlock_t ci18n_shard_counter_lock = CI18N_RWLOCK_INIT;
+static unsigned ci18n_shard_counter;
+
+static unsigned ci18n_my_shard(void)
+{
+    if (ci18n_tls_shard == 0)
+    {
+        ci18n_rwlock_write(&ci18n_shard_counter_lock);
+        ci18n_tls_shard = ci18n_shard_counter++ % CI18N_LOCK_SHARDS + 1;
+        ci18n_rwlock_write_unlock(&ci18n_shard_counter_lock);
+    }
+    return ci18n_tls_shard - 1;
+}
+
+/* Always in the same order, so two writers cannot deadlock. */
+static void ci18n_lock_all(ci18n_context_t *c)
+{
+    unsigned i;
+    for (i = 0; i < CI18N_LOCK_SHARDS; i++)
+    {
+        ci18n_rwlock_write(&c->locks[i].lock);
+    }
+}
+
+static void ci18n_unlock_all(ci18n_context_t *c)
+{
+    unsigned i = CI18N_LOCK_SHARDS;
+    while (i-- > 0)
+    {
+        ci18n_rwlock_write_unlock(&c->locks[i].lock);
+    }
+}
+
+#define CI18N_READ_LOCK(c) ci18n_rwlock_read(&(c)->locks[ci18n_my_shard()].lock)
+#define CI18N_READ_UNLOCK(c) ci18n_rwlock_read_unlock(&(c)->locks[ci18n_my_shard()].lock)
+#define CI18N_WRITE_LOCK(c) ci18n_lock_all(c)
+#define CI18N_WRITE_UNLOCK(c) ci18n_unlock_all(c)
 
 /*
  * Diagnostics are per-thread even though the data is shared: an error code
@@ -1378,7 +1438,7 @@ static CI18N_THREAD_LOCAL ci18n_load_stats_t ci18n_tls_stats;
  * macOS the initialiser carries a signature, a zeroed lock is invalid, and
  * every call returned EINVAL and did nothing.
  */
-static ci18n_context_t ci18n_ctx = {.lock = CI18N_RWLOCK_INIT};
+static ci18n_context_t ci18n_ctx = {.locks = CI18N_LOCK_SHARDS_INIT};
 
 #else /* not CI18N_THREAD_SHARED */
 
@@ -5235,15 +5295,25 @@ CI18N_DEF ci18n_t *ci18n_create(void)
     /* The default catalogue gets a static initialiser; one made at runtime
      * has to be initialised here. calloc leaves it zeroed, which happens to
      * be right for SRWLOCK and is not something to rely on for pthreads. */
-#if defined(_WIN32)
-    InitializeSRWLock(&catalog->lock);
-#else
-    if (pthread_rwlock_init(&catalog->lock, NULL) != 0)
     {
-        free(catalog);
-        return NULL;
-    }
+        unsigned i;
+        for (i = 0; i < CI18N_LOCK_SHARDS; i++)
+        {
+#if defined(_WIN32)
+            InitializeSRWLock(&catalog->locks[i].lock);
+#else
+            if (pthread_rwlock_init(&catalog->locks[i].lock, NULL) != 0)
+            {
+                while (i-- > 0)
+                {
+                    pthread_rwlock_destroy(&catalog->locks[i].lock);
+                }
+                free(catalog);
+                return NULL;
+            }
 #endif
+        }
+    }
 #endif
 
     catalog->initialized = true;
@@ -5266,7 +5336,10 @@ CI18N_DEF void ci18n_destroy(ci18n_t *catalog)
 
 #ifdef CI18N_THREAD_SHARED
 #if !defined(_WIN32)
-    pthread_rwlock_destroy(&catalog->lock);
+    for (i = 0; i < CI18N_LOCK_SHARDS; i++)
+    {
+        pthread_rwlock_destroy(&catalog->locks[i].lock);
+    }
 #endif
 #endif
 
