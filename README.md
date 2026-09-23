@@ -38,12 +38,16 @@ afternoon.
 | Sorting strings in locale order | ICU |
 | Unicode normalization, NFC and NFD | ICU |
 | Time zones | ICU, or your platform |
-| Date, time and calendar formatting | ICU, or `strftime` |
-| Currency formatting | ICU |
+| Date, time and calendar formatting | ICU, or `strftime`, through a formatter |
+| Currency formatting | ICU, through a formatter |
 | Transliteration | ICU |
 | Word and line breaking for languages written without spaces | ICU |
 | Case mapping beyond ASCII, such as Turkish dotless i | ICU |
 | Extracting translatable strings from source code | gettext's `xgettext` |
+
+The two marked "through a formatter" are worth a word: the library will
+not render a date or a currency, but it will call your function to do it,
+in the place the translator chose. See "Formatters" below.
 
 These are a decision rather than a backlog. Almost all of ICU's tens of
 megabytes are CLDR *data*, not code: patterns for some six hundred locales,
@@ -60,11 +64,10 @@ wrong, which is worse than not offering it at all.
 
 ### Not there yet
 
-Planned: per-locale number separators, ordinals, and pluggable formatters,
-so that a `{created:date}` placeholder can call a function you supply and
-the library still needs to know nothing about dates.
+Planned: per-locale number separators, and ordinal plurals.
 
-Text direction arrived in 2.7.0, and has a section of its own below.
+Text direction arrived in 2.7.0, UTF-8 helpers in 2.8.0, and pluggable
+formatters in 2.9.0. Each has a section of its own below.
 
 ### Which one to pick
 
@@ -489,6 +492,74 @@ codepoint, and a single emoji can be several. Counting those needs grapheme
 clusters, which needs the Unicode character database, which is exactly the
 kind of data this library does not ship.
 
+### Formatters
+
+A date in a sentence is a translation problem twice over. Where it goes is the
+translator's business, which named placeholders already solve. How it reads is
+the locale's business, which this library will never know, because knowing it
+means shipping CLDR.
+
+So the translation names a formatter and your code supplies it:
+
+```ini
+invoice=Issued {created:date,long}, due {due:date,short}
+```
+
+```c
+static size_t format_date(char *out, size_t capacity, const char *value,
+                          const char *arg, void *user_data)
+{
+    (void)user_data;
+    return my_render_date(out, capacity, value, arg);  /* your date code */
+}
+
+ci18n_set_formatter("date", format_date, NULL);
+
+ci18n_format(text, sizeof(text), "invoice",
+             "created", "2026-09-23",
+             "due", "2026-10-07", NULL);
+```
+
+The library does the parsing, the lookup and the buffer arithmetic. You do the
+rendering, with whatever you already use for dates. A translator can move the
+placeholder, ask for a different form, or drop it, without touching your code.
+
+The syntax is `{name:formatter}` or `{name:formatter,argument}`. Everything
+after the first comma is the argument, verbatim, so a formatter can define its
+own syntax there:
+
+```ini
+price=Total: {amount:currency,USD}
+when=Updated {ts:relative}
+pad=[{label:pad,12,right}]
+```
+
+Your function follows `snprintf`: write at most `capacity - 1` bytes,
+terminate whenever capacity is non-zero, and return the length the whole
+result would have had. The library calls with `out = NULL` and `capacity = 0`
+to measure, so handle that without writing. `value` and `arg` are never NULL;
+`arg` is `""` when the translation gave none. `user_data` is handed back
+untouched, so it can carry your locale object.
+
+A placeholder naming a formatter nobody registered is left visible and
+`ci18n_last_error()` reports `CI18N_ERR_UNKNOWN_FORMATTER`. The rest of the
+sentence still renders, because a missing formatter is a reason to see a
+defect, not to lose the text around it.
+
+```c
+ci18n_format(out, sizeof(out), "invoice", "created", "2026-09-23", NULL);
+/* out is "Issued {created:date,long}, due ..." and the error says why */
+```
+
+Formatters belong to a catalogue and are not inherited from the default one. A
+library using its own catalogue registers its own, which is the point of
+having catalogues, and it also means formatting never has to hold two locks at
+once. Use `ci18n_set_formatter_in` and `ci18n_format_in` for that.
+
+In the shared threading mode a formatter runs while the catalogue's read lock
+is held. So it must not call back into the library, and it has to be safe to
+run on several threads at once.
+
 ### Locale detection
 
 ```c
@@ -659,6 +730,10 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_utf8_length(text)`                | Characters, not bytes |
 | `ci18n_utf8_sequence_length(text)`       | Bytes in the character here |
 | `ci18n_utf8_truncate(text, max)`         | Cut to fit, at a boundary |
+| `ci18n_set_formatter(name, fn, ud)`      | Register a value renderer |
+| `ci18n_remove_formatter(name)`           | Forget one |
+| `ci18n_format_in(c, out, cap, key, ...)` | Fill placeholders, on that catalogue |
+| `ci18n_format_plural_in(c, ...)`         | Plural form, filled, on that catalogue |
 | `ci18n_format(out, cap, key, ...)`       | Fill named placeholders |
 | `ci18n_format_plural(out, cap, key, n, ...)` | Plural form, filled |
 | `ci18n_detect_locale(out, cap)`          | Locale from the system |
@@ -682,7 +757,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.8.0)
+  GIT_TAG v2.9.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

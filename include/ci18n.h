@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.8.0
+ * ci18n.h - v2.9.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -16,6 +16,7 @@
  *   - Named interpolation, so translations decide where values go
  *   - Text direction, so an Arabic or Hebrew interface lays out correctly
  *   - UTF-8 helpers, and truncation that never splits a character
+ *   - Pluggable formatters, so dates and numbers stay your code
  *
  * USAGE:
  *   #define CI18N_IMPLEMENTATION before including this header in ONE source file
@@ -57,9 +58,9 @@ Second line.
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 8
+#define CI18N_VERSION_MINOR 9
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.8.0"
+#define CI18N_VERSION_STRING "2.9.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -139,6 +140,27 @@ extern "C"
  * enough for anything BCP 47 produces in practice, such as ca-ES-valencia. */
 #ifndef CI18N_MAX_CODE_LENGTH
 #define CI18N_MAX_CODE_LENGTH 32
+#endif
+
+/* How many formatters one catalogue can hold. Applications register a handful
+ * at startup, so the table is small and lives in the catalogue rather than on
+ * the heap. */
+#ifndef CI18N_MAX_FORMATTERS
+#define CI18N_MAX_FORMATTERS 8
+#endif
+
+/* Includes the terminator. Formatter names are written by you, not by
+ * translators, so they are short: "date", "number", "currency". */
+#ifndef CI18N_MAX_FORMATTER_NAME
+#define CI18N_MAX_FORMATTER_NAME 24
+#endif
+
+/* Includes the terminator. The argument after the comma in
+ * {when:date,long} is a form name or a pattern, not prose, so this is
+ * generous. A longer one makes the translation malformed rather than
+ * silently shortened. */
+#ifndef CI18N_MAX_FORMATTER_ARG
+#define CI18N_MAX_FORMATTER_ARG 64
 #endif
 
 /* ============================================================================
@@ -332,7 +354,9 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
         CI18N_ERR_TOO_MANY_KEYS,     /* CI18N_MAX_KEYS_PER_LANGUAGE reached */
         CI18N_ERR_LANGUAGE_NOT_FOUND,/* no such language is loaded */
         CI18N_ERR_KEY_NOT_FOUND,     /* no such key in the languages consulted */
-        CI18N_ERR_PARSE              /* the load dropped or truncated something */
+        CI18N_ERR_PARSE,             /* the load dropped or truncated something */
+        CI18N_ERR_TOO_MANY_FORMATTERS,/* CI18N_MAX_FORMATTERS reached */
+        CI18N_ERR_UNKNOWN_FORMATTER  /* a translation asked for one that is not registered */
     } ci18n_error_t;
 
     /*
@@ -352,6 +376,35 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
         size_t lines_truncated;      /* lines longer than CI18N_MAX_LINE_LENGTH */
     } ci18n_load_stats_t;
 
+    /*
+     * A function you supply that renders one value.
+     *
+     * Follows snprintf(): write at most capacity-1 bytes, terminate whenever
+     * capacity is non-zero, and return the length the whole result would have
+     * had. The library calls with out = NULL and capacity = 0 to measure, so
+     * handle that without writing.
+     *
+     * `value` is the string the caller passed for this placeholder, and `arg`
+     * is whatever followed the comma in the translation, or "" when there was
+     * none. Neither is ever NULL.
+     *
+     * `user_data` is the pointer given at registration, untouched.
+     *
+     * In the shared threading mode this runs while the catalogue's read lock
+     * is held, so it must not call back into the library, and it must be safe
+     * to run on several threads at once.
+     */
+    typedef size_t (*ci18n_formatter_fn)(char *out, size_t capacity,
+                                         const char *value, const char *arg,
+                                         void *user_data);
+
+    typedef struct ci18n_formatter
+    {
+        char name[CI18N_MAX_FORMATTER_NAME];
+        ci18n_formatter_fn fn;
+        void *user_data;
+    } ci18n_formatter_t;
+
     typedef struct ci18n_context
     {
         ci18n_language_t languages[CI18N_MAX_LANGUAGES];
@@ -360,6 +413,8 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
         char fallback_language[CI18N_MAX_CODE_LENGTH];
         ci18n_error_t last_error;
         ci18n_load_stats_t load_stats;
+        ci18n_formatter_t formatters[CI18N_MAX_FORMATTERS];
+        size_t formatter_count;
         bool initialized;
 #ifdef CI18N_THREAD_SHARED
         /* Inside the catalogue, not beside the global, so that every
@@ -911,6 +966,76 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
     CI18N_DEF size_t ci18n_utf8_truncate(char *text, size_t max_bytes);
 
     /* ============================================================================
+     * Formatters
+     * ============================================================================
+     *
+     * A date in a sentence is a translation problem twice over: where it goes
+     * is the translator's business, and how it reads is the locale's. The
+     * first half is already solved by named placeholders. The second half is
+     * not something this library will ever know, because knowing it means
+     * shipping CLDR.
+     *
+     * So the translation names a formatter and your code provides it:
+     *
+     *   invoice=Issued {created:date,long}, due {due:date,short}
+     *
+     *   static size_t format_date(char *out, size_t capacity,
+     *                             const char *value, const char *arg,
+     *                             void *user_data)
+     *   {
+     *       (void)user_data;
+     *       return my_render_date(out, capacity, value, arg);
+     *   }
+     *
+     *   ci18n_set_formatter("date", format_date, NULL);
+     *   ci18n_format(text, sizeof(text), "invoice",
+     *                "created", "2026-09-23", "due", "2026-10-07", NULL);
+     *
+     * The library does the parsing, the lookup and the buffer arithmetic; you
+     * do the rendering, with whatever library you already use for dates. A
+     * translator can move the placeholder, change which form is asked for, or
+     * drop it, without touching your code.
+     *
+     * Placeholder syntax is {name:formatter} or {name:formatter,argument}.
+     * Everything after the first comma is the argument, verbatim, so a
+     * formatter can define its own syntax there. Without a colon a
+     * placeholder behaves exactly as it always has.
+     *
+     * Formatters belong to a catalogue and are not inherited from the default
+     * one. A library using its own catalogue registers its own, which is the
+     * point of having catalogues; it also means formatting never has to take
+     * two locks at once.
+     * ============================================================================ */
+
+    /*
+     * Register `fn` under `name`, replacing any formatter already there.
+     *
+     * `user_data` is handed back to the formatter on every call and is never
+     * inspected, so it can carry your locale object, your arena, or nothing.
+     *
+     * Register before formatting, normally once at startup. In the shared
+     * threading mode this takes the write lock, so it is safe to call later,
+     * but a formatter that appears halfway through a run is a confusing thing
+     * to debug.
+     *
+     * Returns: true on success, false if the name is empty, too long for
+     * CI18N_MAX_FORMATTER_NAME, `fn` is NULL, or CI18N_MAX_FORMATTERS is full
+     */
+    CI18N_DEF bool ci18n_set_formatter(const char *name, ci18n_formatter_fn fn,
+                                       void *user_data);
+
+    /*
+     * Forget the formatter called `name`.
+     *
+     * Translations asking for it then leave their placeholder visible and
+     * report CI18N_ERR_UNKNOWN_FORMATTER, the same as one that was never
+     * registered.
+     *
+     * Returns: true if one was removed, false if there was no such formatter
+     */
+    CI18N_DEF bool ci18n_remove_formatter(const char *name);
+
+    /* ============================================================================
      * Locale detection
      * ============================================================================ */
 
@@ -1015,6 +1140,13 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
     CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count);
     CI18N_DEF ci18n_direction_t ci18n_current_direction_in(ci18n_t *catalog);
+    CI18N_DEF bool ci18n_set_formatter_in(ci18n_t *catalog, const char *name,
+                                          ci18n_formatter_fn fn, void *user_data);
+    CI18N_DEF bool ci18n_remove_formatter_in(ci18n_t *catalog, const char *name);
+    CI18N_DEF size_t ci18n_format_in(ci18n_t *catalog, char *out, size_t capacity,
+                                     const char *key, ...);
+    CI18N_DEF size_t ci18n_format_plural_in(ci18n_t *catalog, char *out, size_t capacity,
+                                            const char *key, long count, ...);
 
     /* Diagnostics for a specific catalogue. In the shared threading mode the
      * plain versions are per-thread, which is what a caller wants; these
@@ -2001,6 +2133,8 @@ static void ci18n_reset_data(ci18n_t *ctx)
     ctx->fallback_language[0] = 0;
     ctx->last_error = CI18N_OK;
     memset(&ctx->load_stats, 0, sizeof(ctx->load_stats));
+    memset(ctx->formatters, 0, sizeof(ctx->formatters));
+    ctx->formatter_count = 0;
     ctx->initialized = false;
 }
 
@@ -2909,6 +3043,71 @@ static size_t ci18n_utf8_decode(const unsigned char *text, size_t limit)
     return length;
 }
 
+/* The number of bytes the sequence starting with `c` should occupy, or 0 if
+ * `c` cannot start one. */
+static size_t ci18n_utf8_lead_length(unsigned char c)
+{
+    if (c < 0x80u)
+    {
+        return 1;
+    }
+    if ((c & 0xE0u) == 0xC0u)
+    {
+        return 2;
+    }
+    if ((c & 0xF0u) == 0xE0u)
+    {
+        return 3;
+    }
+    if ((c & 0xF8u) == 0xF0u)
+    {
+        return 4;
+    }
+    return 0;
+}
+
+/*
+ * How much of text[0 .. len) to keep so it does not end mid character.
+ *
+ * Only the tail is judged, and only by looking inside that range, so this
+ * works on a buffer a formatter has already written into and whose following
+ * byte is gone. Invalid bytes are left alone: tidying a cut is this
+ * function's job, and rewriting bad data is not.
+ */
+static size_t ci18n_utf8_trim_partial(const char *text, size_t len)
+{
+    size_t lead = len;
+    size_t steps = 0;
+    size_t need;
+
+    /* At most three continuation bytes can follow a lead byte, so a lead byte
+     * within four steps is the one that governs the tail. */
+    while (lead > 0 && steps < 4 &&
+           ci18n_utf8_is_continuation((unsigned char)text[lead - 1]))
+    {
+        lead--;
+        steps++;
+    }
+
+    if (lead == 0)
+    {
+        /* Nothing but continuation bytes in reach, which is not a cut we
+         * made. Leave it. */
+        return len;
+    }
+
+    lead--;
+    need = ci18n_utf8_lead_length((unsigned char)text[lead]);
+
+    if (need == 0 || lead + need <= len)
+    {
+        /* Not a lead byte at all, or its sequence is complete. */
+        return len;
+    }
+
+    return lead;
+}
+
 CI18N_DEF bool ci18n_utf8_valid(const char *text)
 {
     const unsigned char *p;
@@ -3039,13 +3238,9 @@ static void ci18n_sink_put(ci18n_sink_t *sink, const char *text, size_t len)
         len = sink->capacity - 1 - sink->written;
 
         /* Cutting here would land wherever the budget ran out, which for
-         * UTF-8 can be halfway through a character. Back off to the boundary
-         * so a truncated result is still decodable. The chunk starts on a
-         * boundary, so walking back within it is enough. */
-        while (len > 0 && ci18n_utf8_is_continuation((unsigned char)text[len]))
-        {
-            len--;
-        }
+         * UTF-8 can be halfway through a character. Drop a trailing partial
+         * character so a truncated result is still decodable. */
+        len = ci18n_utf8_trim_partial(text, len);
     }
 
     if (len > 0)
@@ -3093,14 +3288,94 @@ static const char *ci18n_lookup_argument(va_list args, const char *name, size_t 
 }
 
 /*
+ * Let a formatter write straight into what is left of the output buffer.
+ *
+ * No intermediate buffer, so nothing bounds the result except the caller's
+ * own capacity, and the measuring pass costs nothing. The formatter follows
+ * snprintf(), so it reports the full length whether or not it fitted.
+ */
+static void ci18n_sink_put_formatted(ci18n_sink_t *sink,
+                                     const ci18n_formatter_t *formatter,
+                                     const char *value, const char *arg)
+{
+    char *dest = NULL;
+    size_t room = 0;
+    size_t produced;
+
+    if (sink->capacity > 0)
+    {
+        /* Everything left, including the byte the terminator will want, which
+         * is exactly snprintf's idea of a capacity. */
+        room = sink->capacity - sink->written;
+        dest = sink->out + sink->written;
+    }
+
+    produced = formatter->fn(dest, room, value, arg, formatter->user_data);
+
+    sink->needed += produced;
+
+    if (room == 0)
+    {
+        return;
+    }
+
+    if (produced > room - 1)
+    {
+        produced = room - 1;
+    }
+
+    sink->written += ci18n_utf8_trim_partial(dest, produced);
+}
+
+/* Find a formatter by name. The table is tiny, so a scan is the right shape. */
+static const ci18n_formatter_t *ci18n_find_formatter(ci18n_t *ctx, const char *name)
+{
+    size_t i;
+
+    for (i = 0; i < ctx->formatter_count; i++)
+    {
+        if (strcmp(ctx->formatters[i].name, name) == 0)
+        {
+            return &ctx->formatters[i];
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * Copy a bounded piece of a placeholder into `out`.
+ *
+ * Returns false when it does not fit, which the caller turns into a visible
+ * placeholder rather than a quietly shortened one.
+ */
+static bool ci18n_copy_bounded(char *out, size_t capacity, const char *text, size_t len)
+{
+    if (len >= capacity)
+    {
+        return false;
+    }
+
+    memcpy(out, text, len);
+    out[len] = '\0';
+    return true;
+}
+
+/*
  * Expand {placeholders} in `text`.
  *
  * `count_text` is the pre-rendered number for {count}, or NULL when there is
  * no count. An explicit pair of the same name still wins, so a caller can
  * override it.
+ *
+ * `problem` collects anything wrong with the translation itself, such as a
+ * formatter it names that nobody registered. Reporting it here rather than
+ * returning early keeps the rest of the sentence intact, which is what a
+ * user wants to see.
  */
-static size_t ci18n_expand(char *out, size_t capacity, const char *text,
-                           va_list args, const char *count_text)
+static size_t ci18n_expand(ci18n_t *ctx, char *out, size_t capacity,
+                           const char *text, va_list args,
+                           const char *count_text, ci18n_error_t *problem)
 {
     ci18n_sink_t sink;
     size_t i = 0;
@@ -3113,7 +3388,10 @@ static size_t ci18n_expand(char *out, size_t capacity, const char *text,
     while (text[i] != '\0')
     {
         size_t start;
+        size_t body_len;
         size_t name_len;
+        size_t spec_len;
+        const char *spec;
         const char *value;
 
         if (text[i] != '{')
@@ -3146,18 +3424,28 @@ static size_t ci18n_expand(char *out, size_t capacity, const char *text,
         }
 
         start = i + 1;
-        name_len = 0;
-        while (text[start + name_len] != '\0' && text[start + name_len] != '}')
+        body_len = 0;
+        while (text[start + body_len] != '\0' && text[start + body_len] != '}')
         {
-            name_len++;
+            body_len++;
         }
 
         /* Unterminated: the rest of the string is literal, not a placeholder. */
-        if (text[start + name_len] != '}')
+        if (text[start + body_len] != '}')
         {
             ci18n_sink_put(&sink, text + i, strlen(text + i));
             break;
         }
+
+        /* {name}, {name:formatter} or {name:formatter,argument}. */
+        name_len = 0;
+        while (name_len < body_len && text[start + name_len] != ':')
+        {
+            name_len++;
+        }
+
+        spec = (name_len < body_len) ? text + start + name_len + 1 : NULL;
+        spec_len = spec ? body_len - name_len - 1 : 0;
 
         value = ci18n_lookup_argument(args, text + start, name_len);
 
@@ -3167,7 +3455,59 @@ static size_t ci18n_expand(char *out, size_t capacity, const char *text,
             value = count_text;
         }
 
-        if (value)
+        if (value && spec)
+        {
+            const ci18n_formatter_t *formatter = NULL;
+            char formatter_name[CI18N_MAX_FORMATTER_NAME];
+            char formatter_arg[CI18N_MAX_FORMATTER_ARG];
+            size_t select_len = 0;
+            bool usable;
+
+            /* The formatter is named up to the first comma; everything after
+             * it belongs to the formatter, verbatim. */
+            while (select_len < spec_len && spec[select_len] != ',')
+            {
+                select_len++;
+            }
+
+            formatter_arg[0] = '\0';
+            usable = ci18n_copy_bounded(formatter_name, sizeof(formatter_name),
+                                        spec, select_len);
+
+            if (usable && select_len < spec_len)
+            {
+                usable = ci18n_copy_bounded(formatter_arg, sizeof(formatter_arg),
+                                            spec + select_len + 1,
+                                            spec_len - select_len - 1);
+            }
+
+            if (!usable)
+            {
+                /* Longer than anything that could have been registered, or
+                 * than an argument is allowed to be: the translation is
+                 * malformed rather than the code. */
+                *problem = CI18N_ERR_PARSE;
+            }
+            else
+            {
+                formatter = ci18n_find_formatter(ctx, formatter_name);
+
+                if (!formatter)
+                {
+                    *problem = CI18N_ERR_UNKNOWN_FORMATTER;
+                }
+            }
+
+            if (formatter)
+            {
+                ci18n_sink_put_formatted(&sink, formatter, value, formatter_arg);
+            }
+            else
+            {
+                ci18n_sink_put(&sink, text + i, body_len + 2);
+            }
+        }
+        else if (value)
         {
             ci18n_sink_put(&sink, value, strlen(value));
         }
@@ -3175,10 +3515,10 @@ static size_t ci18n_expand(char *out, size_t capacity, const char *text,
         {
             /* No such name: leave the placeholder visible, so a typo in a
              * translation is something you can see rather than a hole. */
-            ci18n_sink_put(&sink, text + i, name_len + 2);
+            ci18n_sink_put(&sink, text + i, body_len + 2);
         }
 
-        i = start + name_len + 1;
+        i = start + body_len + 1;
     }
 
     if (capacity > 0)
@@ -3223,10 +3563,207 @@ static void ci18n_render_long(char *out, size_t capacity, long value)
     out[i] = '\0';
 }
 
+
+static bool ci18n_set_formatter_impl(ci18n_t *ctx, const char *name,
+                                     ci18n_formatter_fn fn, void *user_data)
+{
+    size_t i;
+
+    if (!ctx->initialized)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!name || name[0] == '\0' || !fn)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    if (strlen(name) >= CI18N_MAX_FORMATTER_NAME)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    /* A name carrying the punctuation that selects it could never be matched
+     * from a translation, so it is a mistake worth reporting rather than a
+     * formatter that silently never runs. */
+    if (strpbrk(name, ":,{}") != NULL)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    for (i = 0; i < ctx->formatter_count; i++)
+    {
+        if (strcmp(ctx->formatters[i].name, name) == 0)
+        {
+            ctx->formatters[i].fn = fn;
+            ctx->formatters[i].user_data = user_data;
+            ci18n_succeed(ctx);
+            return true;
+        }
+    }
+
+    if (ctx->formatter_count >= CI18N_MAX_FORMATTERS)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_TOO_MANY_FORMATTERS);
+    }
+
+    ci18n_copy(ctx->formatters[ctx->formatter_count].name,
+               sizeof(ctx->formatters[0].name), name);
+    ctx->formatters[ctx->formatter_count].fn = fn;
+    ctx->formatters[ctx->formatter_count].user_data = user_data;
+    ctx->formatter_count++;
+
+    ci18n_succeed(ctx);
+    return true;
+}
+
+static bool ci18n_remove_formatter_impl(ci18n_t *ctx, const char *name)
+{
+    size_t i;
+
+    if (!ctx->initialized)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_NOT_INITIALIZED);
+    }
+
+    if (!name)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_INVALID_ARGUMENT);
+    }
+
+    for (i = 0; i < ctx->formatter_count; i++)
+    {
+        if (strcmp(ctx->formatters[i].name, name) != 0)
+        {
+            continue;
+        }
+
+        /* Move the last entry into the hole, as the entry table does. Order
+         * is not observable: lookup is by name. */
+        ctx->formatter_count--;
+        if (i != ctx->formatter_count)
+        {
+            ctx->formatters[i] = ctx->formatters[ctx->formatter_count];
+        }
+        memset(&ctx->formatters[ctx->formatter_count], 0,
+               sizeof(ctx->formatters[0]));
+
+        ci18n_succeed(ctx);
+        return true;
+    }
+
+    return ci18n_fail(ctx, CI18N_ERR_KEY_NOT_FOUND);
+}
+
+CI18N_DEF bool ci18n_set_formatter_in(ci18n_t *catalog, const char *name,
+                                      ci18n_formatter_fn fn, void *user_data)
+{
+    bool result;
+
+    if (!catalog)
+    {
+        return false;
+    }
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_set_formatter_impl(catalog, name, fn, user_data);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_set_formatter(const char *name, ci18n_formatter_fn fn,
+                                   void *user_data)
+{
+    return ci18n_set_formatter_in(&ci18n_ctx, name, fn, user_data);
+}
+
+CI18N_DEF bool ci18n_remove_formatter_in(ci18n_t *catalog, const char *name)
+{
+    bool result;
+
+    if (!catalog)
+    {
+        return false;
+    }
+
+    CI18N_WRITE_LOCK(catalog);
+    result = ci18n_remove_formatter_impl(catalog, name);
+    CI18N_WRITE_UNLOCK(catalog);
+
+    return result;
+}
+
+CI18N_DEF bool ci18n_remove_formatter(const char *name)
+{
+    return ci18n_remove_formatter_in(&ci18n_ctx, name);
+}
+
+/*
+ * Expand a translation and report anything the translation itself got wrong,
+ * such as naming a formatter nobody registered. The error is raised after the
+ * whole string is expanded rather than at the first problem, so the rest of
+ * the sentence still comes out.
+ */
+static size_t ci18n_expand_reporting(ci18n_t *ctx, char *out, size_t capacity,
+                                     const char *text, va_list args,
+                                     const char *count_text)
+{
+    ci18n_error_t problem = CI18N_OK;
+    size_t needed;
+
+    needed = ci18n_expand(ctx, out, out ? capacity : 0, text, args,
+                          count_text, &problem);
+
+    if (problem == CI18N_OK)
+    {
+        ci18n_succeed(ctx);
+    }
+    else
+    {
+        (void)ci18n_fail(ctx, problem);
+    }
+
+    return needed;
+}
+
+CI18N_DEF size_t ci18n_format_in(ci18n_t *catalog, char *out, size_t capacity,
+                                 const char *key, ...)
+{
+    va_list args;
+    const char *text;
+    size_t needed;
+
+    if (capacity > 0 && out)
+    {
+        out[0] = '\0';
+    }
+
+    if (!catalog)
+    {
+        return 0;
+    }
+
+    CI18N_READ_LOCK(catalog);
+
+    text = ci18n_get_impl(catalog, key);
+    if (!text)
+    {
+        CI18N_READ_UNLOCK(catalog);
+        return 0;
+    }
+
+    va_start(args, key);
+    needed = ci18n_expand_reporting(catalog, out, capacity, text, args, NULL);
+    va_end(args);
+
+    CI18N_READ_UNLOCK(catalog);
+    return needed;
+}
+
 CI18N_DEF size_t ci18n_format(char *out, size_t capacity, const char *key, ...)
 {
-    ci18n_t *ctx = &ci18n_ctx;
-
     va_list args;
     const char *text;
     size_t needed;
@@ -3246,19 +3783,53 @@ CI18N_DEF size_t ci18n_format(char *out, size_t capacity, const char *key, ...)
     }
 
     va_start(args, key);
-    needed = ci18n_expand(out, out ? capacity : 0, text, args, NULL);
+    needed = ci18n_expand_reporting(&ci18n_ctx, out, capacity, text, args, NULL);
     va_end(args);
 
-    ci18n_succeed(ctx);
     CI18N_READ_UNLOCK(&ci18n_ctx);
+    return needed;
+}
+
+CI18N_DEF size_t ci18n_format_plural_in(ci18n_t *catalog, char *out, size_t capacity,
+                                        const char *key, long count, ...)
+{
+    va_list args;
+    const char *text;
+    char count_text[24];
+    size_t needed;
+
+    if (capacity > 0 && out)
+    {
+        out[0] = '\0';
+    }
+
+    if (!catalog)
+    {
+        return 0;
+    }
+
+    CI18N_READ_LOCK(catalog);
+
+    text = ci18n_plural_impl(catalog, key, count);
+    if (!text)
+    {
+        CI18N_READ_UNLOCK(catalog);
+        return 0;
+    }
+
+    ci18n_render_long(count_text, sizeof(count_text), count);
+
+    va_start(args, count);
+    needed = ci18n_expand_reporting(catalog, out, capacity, text, args, count_text);
+    va_end(args);
+
+    CI18N_READ_UNLOCK(catalog);
     return needed;
 }
 
 CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key,
                                      long count, ...)
 {
-    ci18n_t *ctx = &ci18n_ctx;
-
     va_list args;
     const char *text;
     char count_text[24];
@@ -3281,10 +3852,9 @@ CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key
     ci18n_render_long(count_text, sizeof(count_text), count);
 
     va_start(args, count);
-    needed = ci18n_expand(out, out ? capacity : 0, text, args, count_text);
+    needed = ci18n_expand_reporting(&ci18n_ctx, out, capacity, text, args, count_text);
     va_end(args);
 
-    ci18n_succeed(ctx);
     CI18N_READ_UNLOCK(&ci18n_ctx);
     return needed;
 }
@@ -4425,6 +4995,10 @@ CI18N_DEF const char *ci18n_error_string(ci18n_error_t error)
         return "no such key";
     case CI18N_ERR_PARSE:
         return "the load dropped or truncated something";
+    case CI18N_ERR_TOO_MANY_FORMATTERS:
+        return "too many formatters";
+    case CI18N_ERR_UNKNOWN_FORMATTER:
+        return "a translation asked for a formatter that is not registered";
     }
 
     return "unknown error";

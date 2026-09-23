@@ -32,6 +32,44 @@
  * stored truncated, or a value the trimmer walked off the end of, only shows
  * up when something reads it back.
  */
+
+/*
+ * Writes the argument back out, following snprintf so the library's own
+ * accounting is exercised with a result that can be longer than the buffer.
+ */
+static size_t fuzz_echo(char *out, size_t capacity, const char *value,
+                        const char *arg, void *user_data)
+{
+    size_t len = strlen(value) + strlen(arg);
+    size_t written = 0;
+    const char *parts[2];
+    size_t p;
+
+    (void)user_data;
+
+    parts[0] = value;
+    parts[1] = arg;
+
+    for (p = 0; p < 2; p++)
+    {
+        size_t i;
+        for (i = 0; parts[p][i] != '\0'; i++)
+        {
+            if (capacity > 0 && written < capacity - 1)
+            {
+                out[written++] = parts[p][i];
+            }
+        }
+    }
+
+    if (capacity > 0)
+    {
+        out[written] = '\0';
+    }
+
+    return len;
+}
+
 static void fuzz_one(const uint8_t *data, size_t size)
 {
     const ci18n_load_stats_t *stats;
@@ -43,6 +81,12 @@ static void fuzz_one(const uint8_t *data, size_t size)
     {
         return;
     }
+
+    /* Registered so that a {name:echo,...} placeholder in the fuzzed input
+     * reaches the formatter path rather than only the unknown-formatter one.
+     * The formatter is deliberately dull: what is under test is the library's
+     * buffer arithmetic around it, not the formatting. */
+    ci18n_set_formatter("echo", fuzz_echo, NULL);
 
     ci18n_load_from_buffer("fz", (const char *)data, size);
 

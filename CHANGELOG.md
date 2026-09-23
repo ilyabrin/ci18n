@@ -13,6 +13,41 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## 2.9.0 - 2026-09-23
+
+### Added
+
+- Pluggable formatters. A translation can write `{created:date,long}`, and the
+  function you registered with `ci18n_set_formatter()` renders the value. The
+  library parses the placeholder, finds the formatter and does the buffer
+  arithmetic; rendering dates, numbers and currencies stays in your code,
+  where the locale knowledge you already have lives.
+- Everything after the first comma is the formatter's argument, verbatim, so a
+  formatter defines its own syntax there.
+- `ci18n_format_in()` and `ci18n_format_plural_in()`, so an explicit catalogue
+  can be formatted at all. Their absence was an oversight in 2.6.0, and it
+  would have made per-catalogue formatters unreachable.
+- `ci18n_remove_formatter()`, and `_in` variants of both registration calls.
+- Two error codes: `CI18N_ERR_UNKNOWN_FORMATTER` for a translation naming a
+  formatter nobody registered, and `CI18N_ERR_TOO_MANY_FORMATTERS` for
+  `CI18N_MAX_FORMATTERS`.
+- `CI18N_MAX_FORMATTERS`, `CI18N_MAX_FORMATTER_NAME` and
+  `CI18N_MAX_FORMATTER_ARG` to size all of that.
+
+### Changed
+
+- A placeholder naming an unregistered formatter is left visible and reported,
+  rather than dropped. The rest of the sentence still renders, because a
+  missing formatter is a reason to see a defect, not to lose the text around
+  it.
+- Formatters belong to a catalogue and are not inherited from the default one.
+  Inheritance would have meant formatting sometimes took two catalogues' locks
+  at once, which is a deadlock waiting for the right interleaving.
+- A placeholder containing a colon used to be a name with a colon in it, which
+  matched nothing and was left visible. It is now a name and a formatter.
+  Output is unchanged unless you register a formatter, since an unknown one is
+  also left visible, but `ci18n_last_error()` now reports it.
+
 ## 2.8.0 - 2026-09-23
 
 ### Added

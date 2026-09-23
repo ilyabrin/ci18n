@@ -1,0 +1,19 @@
+# formatter placeholders, valid and not
+plain={name:echo}
+with_arg={name:echo,short}
+commas={name:echo,a,b,c}
+empty_arg={name:echo,}
+empty_formatter={name:}
+unknown={name:nosuch}
+unknown_arg={name:nosuch,x}
+count_formatted={count:echo,pad}
+two={name:echo} and {count:echo}
+nested={name:echo,{x}}
+unterminated={name:echo
+colon_only=:
+long_arg={name:echo,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+long_name={name:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}
+utf8_value={name:echo,привет}
+brace_escape={{name:echo}}
+plural[one]={count:echo} file
+plural[other]={count:echo} files

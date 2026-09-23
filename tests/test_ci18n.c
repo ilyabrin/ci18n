@@ -11,6 +11,7 @@
 #define CI18N_IMPLEMENTATION
 #include "ci18n.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 
@@ -1611,6 +1612,521 @@ TEST(test_format_truncation_keeps_utf8_intact)
     ci18n_free();
 }
 
+/* ============================================================================
+ * Formatters
+ * ============================================================================ */
+
+/* Uppercases ASCII. Follows snprintf, including the measuring call. */
+static size_t fmt_upper(char *out, size_t capacity, const char *value,
+                        const char *arg, void *user_data)
+{
+    size_t len = strlen(value);
+    size_t i;
+
+    (void)arg;
+    (void)user_data;
+
+    for (i = 0; i < len && capacity > 0 && i < capacity - 1; i++)
+    {
+        char c = value[i];
+        out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    }
+
+    if (capacity > 0)
+    {
+        out[i] = '\0';
+    }
+
+    return len;
+}
+
+/* Repeats the value as many times as the argument asks. */
+static size_t fmt_repeat(char *out, size_t capacity, const char *value,
+                         const char *arg, void *user_data)
+{
+    int times = atoi(arg);
+    size_t len = strlen(value);
+    size_t needed;
+    size_t written = 0;
+    int n;
+
+    (void)user_data;
+
+    if (times < 1)
+    {
+        times = 1;
+    }
+    needed = len * (size_t)times;
+
+    for (n = 0; n < times; n++)
+    {
+        size_t i;
+        for (i = 0; i < len && capacity > 0 && written < capacity - 1; i++)
+        {
+            out[written++] = value[i];
+        }
+    }
+
+    if (capacity > 0)
+    {
+        out[written] = '\0';
+    }
+
+    return needed;
+}
+
+/* Records what it was handed, so the plumbing can be checked. */
+static char seen_value[64];
+static char seen_arg[64];
+static void *seen_user_data;
+static int seen_calls;
+
+static size_t fmt_spy(char *out, size_t capacity, const char *value,
+                      const char *arg, void *user_data)
+{
+    seen_calls++;
+    seen_user_data = user_data;
+    strncpy(seen_value, value, sizeof(seen_value) - 1);
+    seen_value[sizeof(seen_value) - 1] = '\0';
+    strncpy(seen_arg, arg, sizeof(seen_arg) - 1);
+    seen_arg[sizeof(seen_arg) - 1] = '\0';
+
+    if (capacity > 0)
+    {
+        out[0] = '\0';
+    }
+    return 0;
+}
+
+/* Always emits the same multi-byte text, to check truncation of its output. */
+static size_t fmt_cyrillic(char *out, size_t capacity, const char *value,
+                           const char *arg, void *user_data)
+{
+    const char *text = "Привет";
+    size_t len = strlen(text);
+    size_t copy = len;
+
+    (void)value;
+    (void)arg;
+    (void)user_data;
+
+    if (capacity == 0)
+    {
+        return len;
+    }
+
+    if (copy > capacity - 1)
+    {
+        copy = capacity - 1;
+    }
+    memcpy(out, text, copy);
+    out[copy] = '\0';
+
+    return len;
+}
+
+static void reset_spy(void)
+{
+    seen_value[0] = '\0';
+    seen_arg[0] = '\0';
+    seen_user_data = NULL;
+    seen_calls = 0;
+}
+
+TEST(test_formatter_runs_for_a_placeholder)
+{
+    char out[64];
+
+    ci18n_init();
+    ASSERT(ci18n_set_formatter("upper", fmt_upper, NULL));
+
+    ci18n_set("en", "greet", "Hello, {name:upper}!");
+    ci18n_set_current("en");
+
+    ci18n_format(out, sizeof(out), "greet", "name", "world", NULL);
+    ASSERT_STR_EQ(out, "Hello, WORLD!");
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ci18n_free();
+}
+
+TEST(test_formatter_receives_value_arg_and_user_data)
+{
+    char out[64];
+    int marker = 7;
+
+    ci18n_init();
+    reset_spy();
+    ASSERT(ci18n_set_formatter("spy", fmt_spy, &marker));
+
+    ci18n_set("en", "k", "[{v:spy,long,with,commas}]");
+    ci18n_set_current("en");
+
+    ci18n_format(out, sizeof(out), "k", "v", "the value", NULL);
+
+    ASSERT(seen_calls == 1);
+    ASSERT_STR_EQ(seen_value, "the value");
+    /* Everything after the first comma is the argument, verbatim. */
+    ASSERT_STR_EQ(seen_arg, "long,with,commas");
+    ASSERT(seen_user_data == &marker);
+    ASSERT_STR_EQ(out, "[]");
+
+    /* No argument at all means an empty one, never NULL. */
+    reset_spy();
+    ci18n_set("en", "k2", "{v:spy}");
+    ci18n_format(out, sizeof(out), "k2", "v", "x", NULL);
+    ASSERT(seen_calls == 1);
+    ASSERT_STR_EQ(seen_arg, "");
+
+    ci18n_free();
+}
+
+TEST(test_formatter_argument_reaches_the_formatter)
+{
+    char out[64];
+
+    ci18n_init();
+    ASSERT(ci18n_set_formatter("repeat", fmt_repeat, NULL));
+
+    ci18n_set("en", "k", "{v:repeat,3}");
+    ci18n_set_current("en");
+
+    ci18n_format(out, sizeof(out), "k", "v", "ab", NULL);
+    ASSERT_STR_EQ(out, "ababab");
+
+    ci18n_free();
+}
+
+TEST(test_unknown_formatter_is_visible_and_reported)
+{
+    char out[64];
+
+    ci18n_init();
+    ci18n_set("en", "k", "before {v:nosuch} after");
+    ci18n_set_current("en");
+
+    ci18n_format(out, sizeof(out), "k", "v", "x", NULL);
+
+    /* The placeholder stays put, so the mistake is on screen rather than
+     * silently swallowed, and the rest of the sentence still renders. */
+    ASSERT_STR_EQ(out, "before {v:nosuch} after");
+    ASSERT(ci18n_last_error() == CI18N_ERR_UNKNOWN_FORMATTER);
+
+    /* Removing a formatter puts a translation back in that state. */
+    ASSERT(ci18n_set_formatter("nosuch", fmt_upper, NULL));
+    ci18n_format(out, sizeof(out), "k", "v", "x", NULL);
+    ASSERT_STR_EQ(out, "before X after");
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ASSERT(ci18n_remove_formatter("nosuch"));
+    ci18n_format(out, sizeof(out), "k", "v", "x", NULL);
+    ASSERT_STR_EQ(out, "before {v:nosuch} after");
+    ASSERT(ci18n_last_error() == CI18N_ERR_UNKNOWN_FORMATTER);
+
+    ci18n_free();
+}
+
+TEST(test_placeholders_without_a_formatter_are_unchanged)
+{
+    char out[64];
+
+    ci18n_init();
+    ASSERT(ci18n_set_formatter("upper", fmt_upper, NULL));
+
+    ci18n_set("en", "plain", "Hello, {name}!");
+    ci18n_set("en", "braces", "{{literal}} and {name}");
+    ci18n_set("en", "missing", "Hello, {nobody}!");
+    ci18n_set_current("en");
+
+    ci18n_format(out, sizeof(out), "plain", "name", "world", NULL);
+    ASSERT_STR_EQ(out, "Hello, world!");
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ci18n_format(out, sizeof(out), "braces", "name", "x", NULL);
+    ASSERT_STR_EQ(out, "{literal} and x");
+
+    /* An unsupplied name is still left visible, and is not a formatter
+     * problem. */
+    ci18n_format(out, sizeof(out), "missing", "name", "x", NULL);
+    ASSERT_STR_EQ(out, "Hello, {nobody}!");
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ci18n_free();
+}
+
+TEST(test_formatter_measuring_and_truncation)
+{
+    char out[8];
+    size_t needed;
+
+    ci18n_init();
+    ASSERT(ci18n_set_formatter("repeat", fmt_repeat, NULL));
+    ci18n_set("en", "k", "{v:repeat,4}");
+    ci18n_set_current("en");
+
+    /* Measuring: no buffer, so the formatter must be asked without one. */
+    needed = ci18n_format(NULL, 0, "k", "v", "abc", NULL);
+    ASSERT(needed == 12);
+
+    /* The same answer with a buffer too small to hold it. */
+    needed = ci18n_format(out, sizeof(out), "k", "v", "abc", NULL);
+    ASSERT(needed == 12);
+    ASSERT(strlen(out) == 7);
+    ASSERT_STR_EQ(out, "abcabca");
+
+    ci18n_free();
+}
+
+TEST(test_formatter_output_is_cut_at_a_character_boundary)
+{
+    char out[8];
+    size_t needed;
+
+    ci18n_init();
+    ASSERT(ci18n_set_formatter("cyr", fmt_cyrillic, NULL));
+    ci18n_set("en", "k", "{v:cyr}");
+    ci18n_set_current("en");
+
+    /* The formatter produces 12 bytes of 2-byte characters into 7 bytes of
+     * room, so the library has to drop the half character it left behind. */
+    needed = ci18n_format(out, sizeof(out), "k", "v", "ignored", NULL);
+    ASSERT(needed == 12);
+    ASSERT(strlen(out) == 6);
+    ASSERT_STR_EQ(out, "При");
+    ASSERT(ci18n_utf8_valid(out));
+
+    ci18n_free();
+}
+
+TEST(test_formatter_works_with_plurals_and_count)
+{
+    char out[64];
+
+    ci18n_init();
+    ASSERT(ci18n_set_formatter("repeat", fmt_repeat, NULL));
+
+    ci18n_set("en", "files[one]", "{count} file for {who:repeat,2}");
+    ci18n_set("en", "files[other]", "{count} files for {who:repeat,2}");
+    ci18n_set_current("en");
+
+    ci18n_format_plural(out, sizeof(out), "files", 1, "who", "ab", NULL);
+    ASSERT_STR_EQ(out, "1 file for abab");
+
+    ci18n_format_plural(out, sizeof(out), "files", 5, "who", "ab", NULL);
+    ASSERT_STR_EQ(out, "5 files for abab");
+
+    /* The count itself can go through a formatter too. */
+    ci18n_set("en", "n[other]", "<{count:repeat,2}>");
+    ci18n_format_plural(out, sizeof(out), "n", 7, NULL);
+    ASSERT_STR_EQ(out, "<77>");
+
+    ci18n_free();
+}
+
+TEST(test_formatter_registration_is_validated)
+{
+    ci18n_init();
+
+    ASSERT(!ci18n_set_formatter(NULL, fmt_upper, NULL));
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
+
+    ASSERT(!ci18n_set_formatter("", fmt_upper, NULL));
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
+
+    ASSERT(!ci18n_set_formatter("upper", NULL, NULL));
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
+
+    /* Longer than CI18N_MAX_FORMATTER_NAME can hold. */
+    ASSERT(!ci18n_set_formatter("a_name_far_longer_than_the_limit_allows",
+                                fmt_upper, NULL));
+    ASSERT(ci18n_last_error() == CI18N_ERR_INVALID_ARGUMENT);
+
+    /* Punctuation that the placeholder syntax uses could never be matched,
+     * so registering it is a mistake rather than a formatter that never
+     * runs. */
+    ASSERT(!ci18n_set_formatter("da:te", fmt_upper, NULL));
+    ASSERT(!ci18n_set_formatter("da,te", fmt_upper, NULL));
+    ASSERT(!ci18n_set_formatter("da}te", fmt_upper, NULL));
+    ASSERT(!ci18n_set_formatter("da{te", fmt_upper, NULL));
+
+    /* Removing one that was never registered says so. */
+    ASSERT(!ci18n_remove_formatter("never_registered"));
+    ASSERT(ci18n_last_error() == CI18N_ERR_KEY_NOT_FOUND);
+
+    ci18n_free();
+}
+
+TEST(test_formatter_table_is_bounded_and_replaceable)
+{
+    char name[CI18N_MAX_FORMATTER_NAME];
+    size_t i;
+    char out[64];
+
+    ci18n_init();
+
+    for (i = 0; i < CI18N_MAX_FORMATTERS; i++)
+    {
+        sprintf(name, "f%u", (unsigned)i);
+        ASSERT(ci18n_set_formatter(name, fmt_upper, NULL));
+    }
+
+    /* One more than the table holds. */
+    ASSERT(!ci18n_set_formatter("one_too_many", fmt_upper, NULL));
+    ASSERT(ci18n_last_error() == CI18N_ERR_TOO_MANY_FORMATTERS);
+
+    /* Replacing an existing name is not a new entry, so it still fits. */
+    ASSERT(ci18n_set_formatter("f0", fmt_repeat, NULL));
+
+    ci18n_set("en", "k", "{v:f0,2}");
+    ci18n_set_current("en");
+    ci18n_format(out, sizeof(out), "k", "v", "xy", NULL);
+    ASSERT_STR_EQ(out, "xyxy");
+
+    /* Freeing a slot lets a new one in. */
+    ASSERT(ci18n_remove_formatter("f1"));
+    ASSERT(ci18n_set_formatter("one_too_many", fmt_upper, NULL));
+
+    ci18n_free();
+}
+
+TEST(test_formatter_argument_too_long_is_a_parse_error)
+{
+    char out[128];
+    char pattern[CI18N_MAX_FORMATTER_ARG + 32];
+    size_t i;
+
+    ci18n_init();
+    ASSERT(ci18n_set_formatter("spy", fmt_spy, NULL));
+
+    strcpy(pattern, "{v:spy,");
+    for (i = strlen(pattern); i < sizeof(pattern) - 3; i++)
+    {
+        pattern[i] = 'x';
+    }
+    pattern[sizeof(pattern) - 3] = '}';
+    pattern[sizeof(pattern) - 2] = '\0';
+
+    ci18n_set("en", "k", pattern);
+    ci18n_set_current("en");
+
+    reset_spy();
+    ci18n_format(out, sizeof(out), "k", "v", "value", NULL);
+
+    /* Not shortened behind the translator's back: the placeholder stays
+     * visible and the load is reported as malformed. */
+    ASSERT(seen_calls == 0);
+    ASSERT(ci18n_last_error() == CI18N_ERR_PARSE);
+    ASSERT(strstr(out, "{v:spy,") != NULL);
+
+    ci18n_free();
+}
+
+TEST(test_formatters_belong_to_their_catalogue)
+{
+    ci18n_t *catalog = ci18n_create();
+    char out[64];
+
+    ASSERT(catalog != NULL);
+
+    ci18n_init();
+    ci18n_set("en", "k", "{v:upper}");
+    ci18n_set_current("en");
+
+    ci18n_set_in(catalog, "en", "k", "{v:upper}");
+    ci18n_set_current_in(catalog, "en");
+
+    /* Registered on the catalogue only. */
+    ASSERT(ci18n_set_formatter_in(catalog, "upper", fmt_upper, NULL));
+
+    ci18n_format_in(catalog, out, sizeof(out), "k", "v", "hi", NULL);
+    ASSERT_STR_EQ(out, "HI");
+    ASSERT(ci18n_last_error_in(catalog) == CI18N_OK);
+
+    /* The default catalogue has no such formatter and does not inherit one. */
+    ci18n_format(out, sizeof(out), "k", "v", "hi", NULL);
+    ASSERT_STR_EQ(out, "{v:upper}");
+    ASSERT(ci18n_last_error() == CI18N_ERR_UNKNOWN_FORMATTER);
+
+    /* And the other way round. */
+    ASSERT(ci18n_set_formatter("repeat", fmt_repeat, NULL));
+    ASSERT(ci18n_remove_formatter_in(catalog, "upper") == true);
+    ASSERT(ci18n_set_formatter_in(catalog, "upper", fmt_upper, NULL));
+
+    ci18n_destroy(catalog);
+    ci18n_free();
+}
+
+TEST(test_format_in_matches_format)
+{
+    ci18n_t *catalog = ci18n_create();
+    char mine[64];
+    char theirs[64];
+
+    ASSERT(catalog != NULL);
+    ASSERT(ci18n_set_formatter_in(catalog, "upper", fmt_upper, NULL));
+
+    ci18n_set_in(catalog, "en", "greet", "Hello, {name:upper}!");
+    ci18n_set_in(catalog, "en", "files[one]", "{count} file");
+    ci18n_set_in(catalog, "en", "files[other]", "{count} files");
+    ci18n_set_current_in(catalog, "en");
+
+    ci18n_init();
+    ASSERT(ci18n_set_formatter("upper", fmt_upper, NULL));
+    ci18n_set("en", "greet", "Hello, {name:upper}!");
+    ci18n_set("en", "files[one]", "{count} file");
+    ci18n_set("en", "files[other]", "{count} files");
+    ci18n_set_current("en");
+
+    ci18n_format(mine, sizeof(mine), "greet", "name", "world", NULL);
+    ci18n_format_in(catalog, theirs, sizeof(theirs), "greet", "name", "world", NULL);
+    ASSERT_STR_EQ(mine, theirs);
+    ASSERT_STR_EQ(theirs, "Hello, WORLD!");
+
+    ci18n_format_plural(mine, sizeof(mine), "files", 3, NULL);
+    ci18n_format_plural_in(catalog, theirs, sizeof(theirs), "files", 3, NULL);
+    ASSERT_STR_EQ(mine, theirs);
+    ASSERT_STR_EQ(theirs, "3 files");
+
+    /* A NULL catalogue answers rather than crashing. */
+    ASSERT(ci18n_format_in(NULL, theirs, sizeof(theirs), "greet", NULL) == 0);
+    ASSERT(ci18n_format_plural_in(NULL, theirs, sizeof(theirs), "files", 1, NULL) == 0);
+
+    ci18n_destroy(catalog);
+    ci18n_free();
+}
+
+TEST(test_formatters_are_cleared_by_free)
+{
+    char out[64];
+
+    ci18n_init();
+    ASSERT(ci18n_set_formatter("upper", fmt_upper, NULL));
+    ci18n_free();
+
+    /* A new run starts with an empty table rather than inheriting the last
+     * one's callbacks, which might point at freed state. */
+    ci18n_init();
+    ci18n_set("en", "k", "{v:upper}");
+    ci18n_set_current("en");
+
+    ci18n_format(out, sizeof(out), "k", "v", "hi", NULL);
+    ASSERT_STR_EQ(out, "{v:upper}");
+    ASSERT(ci18n_last_error() == CI18N_ERR_UNKNOWN_FORMATTER);
+
+    ci18n_free();
+}
+
+TEST(test_formatter_needs_init)
+{
+    ci18n_free();
+
+    ASSERT(!ci18n_set_formatter("upper", fmt_upper, NULL));
+    ASSERT(ci18n_last_error() == CI18N_ERR_NOT_INITIALIZED);
+
+    ASSERT(!ci18n_remove_formatter("upper"));
+    ASSERT(ci18n_last_error() == CI18N_ERR_NOT_INITIALIZED);
+}
+
 TEST(test_plural_lookup_russian)
 {
     ci18n_init();
@@ -2333,7 +2849,9 @@ TEST(test_error_string_covers_every_code)
         CI18N_ERR_TOO_MANY_KEYS,
         CI18N_ERR_LANGUAGE_NOT_FOUND,
         CI18N_ERR_KEY_NOT_FOUND,
-        CI18N_ERR_PARSE
+        CI18N_ERR_PARSE,
+        CI18N_ERR_TOO_MANY_FORMATTERS,
+        CI18N_ERR_UNKNOWN_FORMATTER
     };
     size_t i;
 
@@ -2738,6 +3256,22 @@ int main(void)
     RUN_TEST(test_utf8_truncate_cuts_at_a_boundary);
     RUN_TEST(test_utf8_decode_respects_its_length_limit);
     RUN_TEST(test_format_truncation_keeps_utf8_intact);
+
+    RUN_TEST(test_formatter_runs_for_a_placeholder);
+    RUN_TEST(test_formatter_receives_value_arg_and_user_data);
+    RUN_TEST(test_formatter_argument_reaches_the_formatter);
+    RUN_TEST(test_unknown_formatter_is_visible_and_reported);
+    RUN_TEST(test_placeholders_without_a_formatter_are_unchanged);
+    RUN_TEST(test_formatter_measuring_and_truncation);
+    RUN_TEST(test_formatter_output_is_cut_at_a_character_boundary);
+    RUN_TEST(test_formatter_works_with_plurals_and_count);
+    RUN_TEST(test_formatter_registration_is_validated);
+    RUN_TEST(test_formatter_table_is_bounded_and_replaceable);
+    RUN_TEST(test_formatter_argument_too_long_is_a_parse_error);
+    RUN_TEST(test_formatters_belong_to_their_catalogue);
+    RUN_TEST(test_format_in_matches_format);
+    RUN_TEST(test_formatters_are_cleared_by_free);
+    RUN_TEST(test_formatter_needs_init);
     RUN_TEST(test_plural_lookup_russian);
     RUN_TEST(test_plural_falls_back_through_other_then_plain);
     RUN_TEST(test_plural_guards);
