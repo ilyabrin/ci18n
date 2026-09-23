@@ -13,6 +13,32 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## 2.8.0 - 2026-09-23
+
+### Added
+
+- UTF-8 helpers: `ci18n_utf8_valid()`, `ci18n_utf8_length()` for characters
+  rather than bytes, `ci18n_utf8_sequence_length()` for stepping a string a
+  character at a time, and `ci18n_utf8_truncate()` for cutting text to fit a
+  buffer without splitting a character.
+- Validation is strict in the sense the standard requires: overlong
+  encodings, surrogate halves and values above U+10FFFF are rejected, not
+  tolerated.
+
+### Fixed
+
+- **`ci18n_format()` and `ci18n_format_plural()` could produce invalid UTF-8.**
+  Truncation cut at whatever byte the buffer ran out on, which for any
+  non-ASCII text lands inside a character about as often as not. Asking for a
+  12-byte Russian greeting in an 8-byte buffer returned 7 bytes ending in a
+  lone lead byte. They now cut at a character boundary, so a truncated result
+  is still decodable, which means it can be shorter than `capacity - 1`. The
+  reported length is unchanged, so buffer sizing works as before.
+
+  A property test over 20000 random inputs at every capacity, about 1.28
+  million calls, reports no invalid output; the same test against the previous
+  code reports 495588.
+
 ## 2.7.0 - 2026-09-23
 
 ### Added

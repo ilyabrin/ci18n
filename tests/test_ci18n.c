@@ -1379,6 +1379,238 @@ TEST(test_current_direction_in_a_catalogue)
     ci18n_destroy(catalog);
 }
 
+/*
+ * Byte sequences below are written as adjacent string literals, "\xC0" "\x80"
+ * rather than "\xC0\x80". A hex escape in C consumes as many hex digits as it
+ * can find, so the second form is one character \xC080, not two bytes, and
+ * every test using it would be quietly testing something else.
+ */
+
+TEST(test_utf8_valid_accepts_well_formed)
+{
+    ASSERT(ci18n_utf8_valid(""));
+    ASSERT(ci18n_utf8_valid("plain ascii"));
+    ASSERT(ci18n_utf8_valid("Привет"));
+    ASSERT(ci18n_utf8_valid("日本語"));
+    ASSERT(ci18n_utf8_valid("\xF0\x9F\x91\x8D"));
+
+    /* The first and last value of each sequence length, which is where an
+     * off-by-one in the range checks would show. */
+    ASSERT(ci18n_utf8_valid("\x7F"));               /* U+007F, 1 byte */
+    ASSERT(ci18n_utf8_valid("\xC2" "\x80"));        /* U+0080, 2 bytes */
+    ASSERT(ci18n_utf8_valid("\xDF" "\xBF"));        /* U+07FF */
+    ASSERT(ci18n_utf8_valid("\xE0" "\xA0" "\x80")); /* U+0800, 3 bytes */
+    ASSERT(ci18n_utf8_valid("\xED" "\x9F" "\xBF")); /* U+D7FF, just below the surrogates */
+    ASSERT(ci18n_utf8_valid("\xEE" "\x80" "\x80")); /* U+E000, just above them */
+    ASSERT(ci18n_utf8_valid("\xEF" "\xBF" "\xBF")); /* U+FFFF */
+    ASSERT(ci18n_utf8_valid("\xF0" "\x90" "\x80" "\x80")); /* U+10000, 4 bytes */
+    ASSERT(ci18n_utf8_valid("\xF4" "\x8F" "\xBF" "\xBF")); /* U+10FFFF, the last one */
+}
+
+TEST(test_utf8_valid_rejects_overlong_encodings)
+{
+    /* Encoding a value in more bytes than it needs. Accepting these is how a
+     * check on one representation gets bypassed with another. */
+    ASSERT(!ci18n_utf8_valid("\xC0" "\x80"));               /* U+0000 as 2 bytes */
+    ASSERT(!ci18n_utf8_valid("\xC1" "\xBF"));               /* U+007F as 2 bytes */
+    ASSERT(!ci18n_utf8_valid("\xE0" "\x80" "\x80"));        /* U+0000 as 3 */
+    ASSERT(!ci18n_utf8_valid("\xE0" "\x9F" "\xBF"));        /* U+07FF as 3 */
+    ASSERT(!ci18n_utf8_valid("\xF0" "\x80" "\x80" "\x80")); /* U+0000 as 4 */
+    ASSERT(!ci18n_utf8_valid("\xF0" "\x8F" "\xBF" "\xBF")); /* U+FFFF as 4 */
+}
+
+TEST(test_utf8_valid_rejects_surrogates_and_out_of_range)
+{
+    /* U+D800 to U+DFFF exist only to pair up in UTF-16 and are not
+     * characters, so they must not appear in UTF-8. */
+    ASSERT(!ci18n_utf8_valid("\xED" "\xA0" "\x80")); /* U+D800 */
+    ASSERT(!ci18n_utf8_valid("\xED" "\xBF" "\xBF")); /* U+DFFF */
+
+    /* Above U+10FFFF there are no codepoints at all. */
+    ASSERT(!ci18n_utf8_valid("\xF4" "\x90" "\x80" "\x80"));
+    ASSERT(!ci18n_utf8_valid("\xF5" "\x80" "\x80" "\x80"));
+    ASSERT(!ci18n_utf8_valid("\xFF"));
+}
+
+TEST(test_utf8_valid_rejects_malformed_sequences)
+{
+    /* A continuation byte with no lead byte before it. */
+    ASSERT(!ci18n_utf8_valid("\x80"));
+    ASSERT(!ci18n_utf8_valid("\xBF"));
+
+    /* A sequence the string ends in the middle of. */
+    ASSERT(!ci18n_utf8_valid("\xD0"));
+    ASSERT(!ci18n_utf8_valid("\xE2" "\x82"));
+    ASSERT(!ci18n_utf8_valid("\xF0" "\x9F" "\x91"));
+
+    /* A byte that should continue the sequence but does not. */
+    ASSERT(!ci18n_utf8_valid("\xE2" "\x28" "\xA1"));
+    ASSERT(!ci18n_utf8_valid("\xD0" "z"));
+
+    /* Valid text with one bad byte in the middle is still invalid. */
+    ASSERT(!ci18n_utf8_valid("ok \x80 not ok"));
+
+    ASSERT(!ci18n_utf8_valid(NULL));
+}
+
+TEST(test_utf8_length_counts_characters)
+{
+    ASSERT(ci18n_utf8_length("") == 0);
+    ASSERT(ci18n_utf8_length("abc") == 3);
+
+    /* Six characters, twelve bytes: the whole point of the function. */
+    ASSERT(ci18n_utf8_length("Привет") == 6);
+    ASSERT(strlen("Привет") == 12);
+
+    ASSERT(ci18n_utf8_length("日本語") == 3);
+    ASSERT(ci18n_utf8_length("\xF0\x9F\x91\x8D") == 1);
+    ASSERT(ci18n_utf8_length("a\xC3\xA9\xF0\x9F\x91\x8D") == 3);
+
+    /* An invalid byte counts as one, so the answer stays defined. */
+    ASSERT(ci18n_utf8_length("\x80") == 1);
+    ASSERT(ci18n_utf8_length("a\x80" "b") == 3);
+
+    ASSERT(ci18n_utf8_length(NULL) == 0);
+}
+
+TEST(test_utf8_sequence_length_steps_one_character)
+{
+    ASSERT(ci18n_utf8_sequence_length("a") == 1);
+    ASSERT(ci18n_utf8_sequence_length("\xC3\xA9") == 2);
+    ASSERT(ci18n_utf8_sequence_length("\xE2\x82\xAC") == 3);
+    ASSERT(ci18n_utf8_sequence_length("\xF0\x9F\x91\x8D") == 4);
+
+    /* Never 0 for a non-empty string, or a stepping loop would spin. */
+    ASSERT(ci18n_utf8_sequence_length("\x80") == 1);
+    ASSERT(ci18n_utf8_sequence_length("\xD0") == 1);
+
+    ASSERT(ci18n_utf8_sequence_length("") == 0);
+    ASSERT(ci18n_utf8_sequence_length(NULL) == 0);
+
+    /* Walking a whole string should land exactly on the terminator. */
+    {
+        const char *p = "aПривет日本語";
+        size_t characters = 0;
+        size_t step;
+
+        while ((step = ci18n_utf8_sequence_length(p)) > 0)
+        {
+            p += step;
+            characters++;
+        }
+
+        ASSERT(*p == '\0');
+        ASSERT(characters == ci18n_utf8_length("aПривет日本語"));
+    }
+}
+
+TEST(test_utf8_truncate_cuts_at_a_boundary)
+{
+    char buffer[32];
+
+    /* "Привет" is 12 bytes of 2-byte characters, so a budget of 7 gives 6. */
+    strcpy(buffer, "Привет");
+    ASSERT(ci18n_utf8_truncate(buffer, 7) == 6);
+    ASSERT_STR_EQ(buffer, "При");
+    ASSERT(ci18n_utf8_valid(buffer));
+
+    /* A budget that already falls on a boundary is used in full. */
+    strcpy(buffer, "Привет");
+    ASSERT(ci18n_utf8_truncate(buffer, 6) == 6);
+    ASSERT_STR_EQ(buffer, "При");
+
+    /* Text within budget is untouched, whether the budget is exact or ample. */
+    strcpy(buffer, "Привет");
+    ASSERT(ci18n_utf8_truncate(buffer, 12) == 12);
+    ASSERT_STR_EQ(buffer, "Привет");
+
+    strcpy(buffer, "Привет");
+    ASSERT(ci18n_utf8_truncate(buffer, 100) == 12);
+    ASSERT_STR_EQ(buffer, "Привет");
+
+    /* Not even one character fits, so nothing is kept. */
+    strcpy(buffer, "Привет");
+    ASSERT(ci18n_utf8_truncate(buffer, 1) == 0);
+    ASSERT_STR_EQ(buffer, "");
+
+    strcpy(buffer, "Привет");
+    ASSERT(ci18n_utf8_truncate(buffer, 0) == 0);
+    ASSERT_STR_EQ(buffer, "");
+
+    /* ASCII has no boundaries to respect, so the budget is exact. */
+    strcpy(buffer, "hello");
+    ASSERT(ci18n_utf8_truncate(buffer, 3) == 3);
+    ASSERT_STR_EQ(buffer, "hel");
+
+    /* A 4-byte character backs off the full three bytes. */
+    strcpy(buffer, "\xF0\x9F\x91\x8D" "x");
+    ASSERT(ci18n_utf8_truncate(buffer, 3) == 0);
+    ASSERT_STR_EQ(buffer, "");
+
+    strcpy(buffer, "ab\xF0\x9F\x91\x8D");
+    ASSERT(ci18n_utf8_truncate(buffer, 5) == 2);
+    ASSERT_STR_EQ(buffer, "ab");
+
+    ASSERT(ci18n_utf8_truncate(NULL, 4) == 0);
+}
+
+/*
+ * White-box: the decoder is also given an explicit length, so it must reject
+ * a sequence running past that length. With NUL-terminated input the
+ * terminator happens to reject one anyway, being no valid continuation byte,
+ * so only an unterminated buffer actually exercises the length guard. Any
+ * future caller decoding a mapped file or a slice of a larger buffer depends
+ * on it.
+ */
+TEST(test_utf8_decode_respects_its_length_limit)
+{
+    /* Deliberately not NUL-terminated, and followed by bytes that would form
+     * a valid sequence if the limit were ignored. */
+    static const unsigned char two_byte_lead[] = {0xD0, 0xBF, 0xBF};
+    static const unsigned char four_byte_lead[] = {0xF0, 0x9F, 0x91, 0x8D};
+
+    /* Enough room: decoded as the 2-byte character it is. */
+    ASSERT(ci18n_utf8_decode(two_byte_lead, 3) == 2);
+    ASSERT(ci18n_utf8_decode(two_byte_lead, 2) == 2);
+
+    /* One byte of room for a 2-byte character: refused without reading on. */
+    ASSERT(ci18n_utf8_decode(two_byte_lead, 1) == 0);
+    ASSERT(ci18n_utf8_decode(two_byte_lead, 0) == 0);
+
+    ASSERT(ci18n_utf8_decode(four_byte_lead, 4) == 4);
+    ASSERT(ci18n_utf8_decode(four_byte_lead, 3) == 0);
+    ASSERT(ci18n_utf8_decode(four_byte_lead, 2) == 0);
+    ASSERT(ci18n_utf8_decode(four_byte_lead, 1) == 0);
+}
+
+TEST(test_format_truncation_keeps_utf8_intact)
+{
+    char out[8];
+    size_t needed;
+
+    ci18n_init();
+    ci18n_set("ru", "greeting", "Привет");
+    ci18n_set_current("ru");
+
+    /* 12 bytes into 8: the report is still the full length, so a caller can
+     * size a buffer, but what landed is whole characters only. */
+    needed = ci18n_format(out, sizeof(out), "greeting", NULL);
+    ASSERT(needed == 12);
+    ASSERT(strlen(out) == 6);
+    ASSERT_STR_EQ(out, "При");
+    ASSERT(ci18n_utf8_valid(out));
+
+    /* The same must hold when the cut falls inside an interpolated value
+     * rather than inside the literal text. */
+    ci18n_set("ru", "hello", "П{name}");
+    needed = ci18n_format(out, sizeof(out), "hello", "name", "риветик", NULL);
+    ASSERT(needed == 16);
+    ASSERT(ci18n_utf8_valid(out));
+    ASSERT(strlen(out) % 2 == 0);
+
+    ci18n_free();
+}
+
 TEST(test_plural_lookup_russian)
 {
     ci18n_init();
@@ -2496,6 +2728,16 @@ int main(void)
     RUN_TEST(test_direction_names);
     RUN_TEST(test_current_direction_follows_the_current_language);
     RUN_TEST(test_current_direction_in_a_catalogue);
+
+    RUN_TEST(test_utf8_valid_accepts_well_formed);
+    RUN_TEST(test_utf8_valid_rejects_overlong_encodings);
+    RUN_TEST(test_utf8_valid_rejects_surrogates_and_out_of_range);
+    RUN_TEST(test_utf8_valid_rejects_malformed_sequences);
+    RUN_TEST(test_utf8_length_counts_characters);
+    RUN_TEST(test_utf8_sequence_length_steps_one_character);
+    RUN_TEST(test_utf8_truncate_cuts_at_a_boundary);
+    RUN_TEST(test_utf8_decode_respects_its_length_limit);
+    RUN_TEST(test_format_truncation_keeps_utf8_intact);
     RUN_TEST(test_plural_lookup_russian);
     RUN_TEST(test_plural_falls_back_through_other_then_plain);
     RUN_TEST(test_plural_guards);

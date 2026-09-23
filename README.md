@@ -88,7 +88,7 @@ different claim.
 - ✅ Load from files and buffers
 - ✅ Fallback language
 - ✅ Thread-local context (optional)
-- ✅ UTF-8 compatible, skips a BOM in translation files
+- ✅ UTF-8 aware: strict validation, and truncation that keeps characters whole
 
 Small enough to mean it. Three translation files of eight keys each cost
 1600 bytes of heap, and a lookup among a thousand keys takes about 75 ns.
@@ -417,6 +417,78 @@ Two deliberate choices worth knowing:
 
 Write `{{` and `}}` for literal braces.
 
+### UTF-8
+
+The library is byte-transparent: it stores and returns what you give it, so
+UTF-8 passes through untouched. These helpers exist for the two places where
+bytes are not enough.
+
+Counting characters is not counting bytes:
+
+```c
+strlen("Привет");            /* 12 */
+ci18n_utf8_length("Привет");  /* 6  */
+```
+
+And cutting a string to fit a buffer can land in the middle of a character,
+which produces bytes no decoder accepts. `ci18n_utf8_truncate` cuts only at a
+boundary:
+
+```c
+char label[16];
+
+ci18n_get_copy("title", label, sizeof(label));
+ci18n_utf8_truncate(label, sizeof(label) - 1);
+```
+
+The budget is the text length, terminator not counted, so a `char[16]` takes
+`sizeof(buffer) - 1`. The result can come out up to three bytes short of the
+budget, because the cut moves back rather than splitting a character. Nothing
+is appended, so if you want an ellipsis there is room for one.
+
+`ci18n_format` and `ci18n_format_plural` already do this for you: a truncated
+result is always valid UTF-8. The reported length is still the full length, so
+sizing a buffer works as before.
+
+```c
+char out[8];
+
+ci18n_set("ru", "greeting", "Привет");
+ci18n_format(out, sizeof(out), "greeting", NULL);  /* returns 12 */
+/* out is "При", 6 bytes, not 7 bytes ending in half a character */
+```
+
+Validation is strict, in the sense the Unicode standard requires:
+
+```c
+ci18n_utf8_valid(text);
+```
+
+It rejects what is not UTF-8, rather than only what fails to decode: a
+character written in more bytes than it needs, a surrogate half from U+D800
+to U+DFFF, anything above U+10FFFF, a continuation byte with no lead byte,
+and a sequence the string ends in the middle of. Lenient decoders are how a
+check on one representation gets bypassed with another.
+
+To walk a string a character at a time:
+
+```c
+for (const char *p = text; *p; p += ci18n_utf8_sequence_length(p))
+{
+    /* p points at one whole character */
+}
+```
+
+That never stalls: an invalid byte reports 1, stepping past the problem
+instead of looping forever on it.
+
+One honest limit. "Character" here means one Unicode codepoint, which is the
+useful answer for a length limit but still not the number of things a reader
+would count. An accent written as a separate combining mark is its own
+codepoint, and a single emoji can be several. Counting those needs grapheme
+clusters, which needs the Unicode character database, which is exactly the
+kind of data this library does not ship.
+
 ### Locale detection
 
 ```c
@@ -583,6 +655,10 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_direction(code)`                  | Which way a language is written |
 | `ci18n_direction_name(dir)`              | Direction as "ltr" or "rtl" |
 | `ci18n_current_direction()`              | Direction of the current language |
+| `ci18n_utf8_valid(text)`                 | Is it well-formed UTF-8 |
+| `ci18n_utf8_length(text)`                | Characters, not bytes |
+| `ci18n_utf8_sequence_length(text)`       | Bytes in the character here |
+| `ci18n_utf8_truncate(text, max)`         | Cut to fit, at a boundary |
 | `ci18n_format(out, cap, key, ...)`       | Fill named placeholders |
 | `ci18n_format_plural(out, cap, key, n, ...)` | Plural form, filled |
 | `ci18n_detect_locale(out, cap)`          | Locale from the system |
@@ -606,7 +682,7 @@ As a dependency fetched at configure time:
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.7.0)
+  GIT_TAG v2.8.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)

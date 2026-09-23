@@ -1,5 +1,5 @@
 /*
- * ci18n.h - v2.7.0
+ * ci18n.h - v2.8.0
  * Single-header internationalization (i18n) library for C projects
  *
  * Features:
@@ -15,6 +15,7 @@
  *   - Locale detection with a fallback chain: ru-RU to ru
  *   - Named interpolation, so translations decide where values go
  *   - Text direction, so an Arabic or Hebrew interface lays out correctly
+ *   - UTF-8 helpers, and truncation that never splits a character
  *
  * USAGE:
  *   #define CI18N_IMPLEMENTATION before including this header in ONE source file
@@ -56,9 +57,9 @@ Second line.
  * ============================================================================ */
 
 #define CI18N_VERSION_MAJOR 2
-#define CI18N_VERSION_MINOR 7
+#define CI18N_VERSION_MINOR 8
 #define CI18N_VERSION_PATCH 0
-#define CI18N_VERSION_STRING "2.7.0"
+#define CI18N_VERSION_STRING "2.8.0"
 
 /* Compare against this to require a minimum version at compile time:
  *   #if CI18N_VERSION < CI18N_VERSION_NUMBER(2, 0, 0)
@@ -785,6 +786,11 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
      * more means it was truncated. Passing out = NULL with capacity = 0
      * measures without writing, which is how you size a buffer.
      *
+     * Truncation stops at a character boundary, so a cut result is still
+     * valid UTF-8. That means it can come out shorter than capacity-1: a
+     * 12-byte Russian greeting cut into 8 bytes gives 6 bytes rather than 7,
+     * because the seventh would have been half of a character.
+     *
      * A placeholder with no matching name is left exactly as it appears, so a
      * typo in a translation shows up in the output instead of vanishing.
      *
@@ -812,6 +818,97 @@ typedef pthread_rwlock_t ci18n_rwlock_t;
      */
     CI18N_DEF size_t ci18n_format_plural(char *out, size_t capacity, const char *key,
                                          long count, ...);
+
+    /* ============================================================================
+     * UTF-8
+     * ============================================================================
+     *
+     * The library is byte-transparent: it stores and returns whatever you
+     * give it, so UTF-8 passes through untouched and these helpers are here
+     * for the places where bytes are not enough.
+     *
+     * Two things bite in practice. Counting characters is not counting bytes,
+     * so a field that allows twenty characters cannot be checked with
+     * strlen(). And cutting a string to fit a buffer can land in the middle
+     * of a character, which produces bytes no decoder will accept. The
+     * library's own formatting handles the second case for you; these let you
+     * handle it in your own code.
+     *
+     *   char label[16];
+     *   ci18n_get_copy("title", label, sizeof(label));
+     *   ci18n_utf8_truncate(label, sizeof(label) - 1);
+     *
+     * Validation is strict, in the sense the Unicode standard requires:
+     * overlong encodings, surrogate halves and anything above U+10FFFF are
+     * rejected rather than tolerated. Lenient decoders are how mismatched
+     * validation turns into a security bug.
+     * ============================================================================ */
+
+    /*
+     * Whether `text` is well-formed UTF-8.
+     *
+     * Rejects what the standard says is not UTF-8, not merely what fails to
+     * decode: a character encoded in more bytes than it needs (overlong), a
+     * surrogate half in the range U+D800 to U+DFFF, a value above U+10FFFF,
+     * a continuation byte where a lead byte belongs, and a sequence cut short
+     * by the end of the string.
+     *
+     * Note that an empty string is valid, and so is any pure ASCII string.
+     *
+     * Returns: true if well-formed, false otherwise, and false for NULL
+     */
+    CI18N_DEF bool ci18n_utf8_valid(const char *text);
+
+    /*
+     * How many characters `text` holds, rather than how many bytes.
+     *
+     * "Character" here means one Unicode codepoint. That is the useful answer
+     * for a length limit, though it is still not the number of things a
+     * reader would count: an accent written as a separate combining mark is
+     * its own codepoint, and an emoji can be several. Counting those needs
+     * grapheme clusters, which is a CLDR-sized job and not here.
+     *
+     * Invalid bytes count as one character each, so the answer is always
+     * defined and never exceeds the byte length. Check with
+     * ci18n_utf8_valid() when you need to know the input was sound.
+     *
+     * Returns: the number of codepoints, and 0 for NULL
+     */
+    CI18N_DEF size_t ci18n_utf8_length(const char *text);
+
+    /*
+     * How many bytes the character at `text` occupies.
+     *
+     * Use it to step through a string one character at a time:
+     *
+     *   for (const char *p = text; *p; p += ci18n_utf8_sequence_length(p))
+     *       ...
+     *
+     * A return of 0 would make that loop spin, so it never happens for a
+     * non-empty string: an invalid byte reports 1, which steps past the
+     * problem rather than stalling on it.
+     *
+     * Returns: 1 to 4 for a valid character, 1 for an invalid byte, and 0 at
+     * the terminator or for NULL
+     */
+    CI18N_DEF size_t ci18n_utf8_sequence_length(const char *text);
+
+    /*
+     * Shorten `text` in place so it fits `max_bytes`, cutting only at a
+     * character boundary.
+     *
+     * `max_bytes` is the budget for the text itself, with the terminator not
+     * counted, so a `char buf[16]` takes `sizeof(buf) - 1`. Text already
+     * within budget is left alone.
+     *
+     * The result can be shorter than the budget, by up to three bytes, since
+     * the cut moves back to the last boundary rather than landing mid
+     * character. Nothing is appended: if you want an ellipsis, there is room
+     * for one because you chose the budget.
+     *
+     * Returns: the new length in bytes, and 0 for NULL
+     */
+    CI18N_DEF size_t ci18n_utf8_truncate(char *text, size_t max_bytes);
 
     /* ============================================================================
      * Locale detection
@@ -2712,6 +2809,214 @@ static const char *ci18n_plural_impl(ci18n_t *ctx, const char *key, long count);
  * Writes into the caller's buffer while counting what the whole result would
  * need, so one pass can both fill a buffer and report a too-small one.
  */
+/* ============================================================================
+ * UTF-8
+ *
+ * One table drives all of it. For a lead byte it gives the sequence length
+ * and the allowed range of the second byte, which is where the awkward cases
+ * live: the second byte is what distinguishes an overlong encoding from a
+ * real one, and a surrogate half from a legitimate character.
+ * ============================================================================ */
+
+static bool ci18n_utf8_is_continuation(unsigned char c)
+{
+    return (c & 0xC0u) == 0x80u;
+}
+
+/*
+ * Decode the sequence at `text`, strictly.
+ *
+ * Returns its length in bytes, or 0 if the bytes there are not a well-formed
+ * character. `limit` is how many bytes are readable, so a sequence running
+ * past the end is rejected rather than read.
+ */
+static size_t ci18n_utf8_decode(const unsigned char *text, size_t limit)
+{
+    unsigned char lead;
+    unsigned char second_min = 0x80u;
+    unsigned char second_max = 0xBFu;
+    size_t length;
+    size_t i;
+
+    if (limit == 0)
+    {
+        return 0;
+    }
+
+    lead = text[0];
+
+    if (lead < 0x80u)
+    {
+        return 1;
+    }
+    else if (lead >= 0xC2u && lead <= 0xDFu)
+    {
+        /* 0xC0 and 0xC1 could only ever encode a value that fits in one
+         * byte, so they are overlong by construction and never valid. */
+        length = 2;
+    }
+    else if (lead >= 0xE0u && lead <= 0xEFu)
+    {
+        length = 3;
+
+        if (lead == 0xE0u)
+        {
+            second_min = 0xA0u; /* below this is an overlong 2-byte value */
+        }
+        else if (lead == 0xEDu)
+        {
+            second_max = 0x9Fu; /* above this is a surrogate, U+D800 to U+DFFF */
+        }
+    }
+    else if (lead >= 0xF0u && lead <= 0xF4u)
+    {
+        length = 4;
+
+        if (lead == 0xF0u)
+        {
+            second_min = 0x90u; /* below this is an overlong 3-byte value */
+        }
+        else if (lead == 0xF4u)
+        {
+            second_max = 0x8Fu; /* above this is beyond U+10FFFF */
+        }
+    }
+    else
+    {
+        /* A continuation byte with no lead, or 0xF5 and up, which no
+         * codepoint reaches. */
+        return 0;
+    }
+
+    if (limit < length)
+    {
+        return 0;
+    }
+
+    if (text[1] < second_min || text[1] > second_max)
+    {
+        return 0;
+    }
+
+    for (i = 2; i < length; i++)
+    {
+        if (!ci18n_utf8_is_continuation(text[i]))
+        {
+            return 0;
+        }
+    }
+
+    return length;
+}
+
+CI18N_DEF bool ci18n_utf8_valid(const char *text)
+{
+    const unsigned char *p;
+    size_t len;
+
+    if (!text)
+    {
+        return false;
+    }
+
+    p = (const unsigned char *)text;
+    len = strlen(text);
+
+    while (len > 0)
+    {
+        size_t step = ci18n_utf8_decode(p, len);
+
+        if (step == 0)
+        {
+            return false;
+        }
+
+        p += step;
+        len -= step;
+    }
+
+    return true;
+}
+
+CI18N_DEF size_t ci18n_utf8_length(const char *text)
+{
+    const unsigned char *p;
+    size_t len;
+    size_t count = 0;
+
+    if (!text)
+    {
+        return 0;
+    }
+
+    p = (const unsigned char *)text;
+    len = strlen(text);
+
+    while (len > 0)
+    {
+        size_t step = ci18n_utf8_decode(p, len);
+
+        /* An invalid byte counts as one character, so the count stays defined
+         * and the walk always makes progress. */
+        if (step == 0)
+        {
+            step = 1;
+        }
+
+        p += step;
+        len -= step;
+        count++;
+    }
+
+    return count;
+}
+
+CI18N_DEF size_t ci18n_utf8_sequence_length(const char *text)
+{
+    size_t step;
+
+    if (!text || text[0] == '\0')
+    {
+        return 0;
+    }
+
+    step = ci18n_utf8_decode((const unsigned char *)text, strlen(text));
+
+    /* Stepping by 1 past a bad byte beats returning 0 and hanging the
+     * caller's loop. */
+    return (step == 0) ? 1 : step;
+}
+
+CI18N_DEF size_t ci18n_utf8_truncate(char *text, size_t max_bytes)
+{
+    size_t len;
+    size_t cut;
+
+    if (!text)
+    {
+        return 0;
+    }
+
+    len = strlen(text);
+
+    if (len <= max_bytes)
+    {
+        return len;
+    }
+
+    /* Walk back off any continuation bytes, so the cut lands between
+     * characters rather than inside one. At most three steps, since that is
+     * the longest run of continuation bytes UTF-8 allows. */
+    cut = max_bytes;
+    while (cut > 0 && ci18n_utf8_is_continuation((unsigned char)text[cut]))
+    {
+        cut--;
+    }
+
+    text[cut] = '\0';
+    return cut;
+}
+
 typedef struct ci18n_sink
 {
     char *out;
@@ -2732,6 +3037,15 @@ static void ci18n_sink_put(ci18n_sink_t *sink, const char *text, size_t len)
     if (sink->written + len > sink->capacity - 1)
     {
         len = sink->capacity - 1 - sink->written;
+
+        /* Cutting here would land wherever the budget ran out, which for
+         * UTF-8 can be halfway through a character. Back off to the boundary
+         * so a truncated result is still decodable. The chunk starts on a
+         * boundary, so walking back within it is enough. */
+        while (len > 0 && ci18n_utf8_is_continuation((unsigned char)text[len]))
+        {
+            len--;
+        }
     }
 
     if (len > 0)
