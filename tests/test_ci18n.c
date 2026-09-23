@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "cldr_samples.h"
+#include "cldr_numbers.h"
 #include <assert.h>
 
 static int tests_run = 0;
@@ -2560,6 +2561,109 @@ TEST(test_load_mo_refuses_what_is_not_one)
 }
 #endif /* CI18N_NO_MO */
 
+/* Every language, against what tools/cldr_numbers.py derived from CLDR. */
+TEST(test_format_number_matches_cldr)
+{
+    size_t i;
+    int wrong = 0;
+
+    for (i = 0; i < sizeof(CLDR_NUMBER_CASES) / sizeof(CLDR_NUMBER_CASES[0]); i++)
+    {
+        const cldr_number_case_t *c = &CLDR_NUMBER_CASES[i];
+        char out[64];
+        size_t len = ci18n_format_number(out, sizeof(out), c->language, c->number,
+                                         c->fraction_digits);
+
+        if (strcmp(out, c->expected) != 0 || len != strlen(c->expected))
+        {
+            printf("  %s %s,%d: got [%s], CLDR says [%s]\n", c->language, c->number,
+                   c->fraction_digits, out, c->expected);
+            wrong++;
+        }
+    }
+    ASSERT(wrong == 0);
+}
+
+TEST(test_format_number_edges)
+{
+    char out[64];
+
+    /* Region, script and charset are ignored, case too. */
+    ci18n_format_number(out, sizeof(out), "RU_ru.UTF-8", "1234.5", -1);
+    ASSERT_STR_EQ(out, "1\xc2\xa0" "234,5");
+
+    /* Leading zeros, a bare fraction, a plus sign, a carry at the top. */
+    ci18n_format_number(out, sizeof(out), "en", "0001234", -1);
+    ASSERT_STR_EQ(out, "1,234");
+    ci18n_format_number(out, sizeof(out), "en", ".5", -1);
+    ASSERT_STR_EQ(out, "0.5");
+    ci18n_format_number(out, sizeof(out), "en", "+7", -1);
+    ASSERT_STR_EQ(out, "7");
+    ci18n_format_number(out, sizeof(out), "en", "9999.96", 1);
+    ASSERT_STR_EQ(out, "10,000.0");
+    ci18n_format_number(out, sizeof(out), "en", ".96", 0);
+    ASSERT_STR_EQ(out, "1");
+
+    /* Rounded to zero, the sign goes. */
+    ci18n_format_number(out, sizeof(out), "en", "-0.001", 2);
+    ASSERT_STR_EQ(out, "0.00");
+
+    /* Not a plain number: passed through untouched. */
+    ci18n_format_number(out, sizeof(out), "en", "1e9", -1);
+    ASSERT_STR_EQ(out, "1e9");
+    ci18n_format_number(out, sizeof(out), "en", "12,5", -1);
+    ASSERT_STR_EQ(out, "12,5");
+    ci18n_format_number(out, sizeof(out), "en", "-", -1);
+    ASSERT_STR_EQ(out, "-");
+    ASSERT(ci18n_format_number(out, sizeof(out), "en", NULL, -1) == 0);
+
+    /* snprintf rules: measure, and cut between characters only. */
+    ASSERT(ci18n_format_number(NULL, 0, "fr", "1234", -1) == 7);
+    ASSERT(ci18n_format_number(out, 3, "fr", "1234", -1) == 7);
+    ASSERT_STR_EQ(out, "1");
+    ASSERT(ci18n_utf8_valid(out));
+}
+
+static size_t shout_number(char *out, size_t capacity, const char *value,
+                           const char *arg, void *user_data)
+{
+    (void)arg;
+    (void)user_data;
+    return (size_t)snprintf(out, capacity, "<%s>", value);
+}
+
+TEST(test_number_formatter_in_translations)
+{
+    char out[128];
+
+    ci18n_init();
+    ci18n_set("de", "total", "Summe: {n:number}");
+    ci18n_set("de", "price", "Preis: {n:number,2} EUR");
+    ci18n_set("de", "files[one]", "{count:number} Datei");
+    ci18n_set("de", "files[other]", "{count:number} Dateien");
+    ci18n_set_current("de");
+
+    ci18n_format(out, sizeof(out), "total", "n", "1234567.5", NULL);
+    ASSERT_STR_EQ(out, "Summe: 1.234.567,5");
+    ASSERT(ci18n_last_error() == CI18N_OK);
+
+    ci18n_format(out, sizeof(out), "price", "n", "19.999", NULL);
+    ASSERT_STR_EQ(out, "Preis: 20,00 EUR");
+
+    ci18n_format_plural(out, sizeof(out), "files", 12000, NULL);
+    ASSERT_STR_EQ(out, "12.000 Dateien");
+
+    /* The measured length agrees with the written one. */
+    ASSERT(ci18n_format(NULL, 0, "total", "n", "1234567.5", NULL) == strlen("Summe: 1.234.567,5"));
+
+    /* A registered "number" replaces the built-in one. */
+    ci18n_set_formatter("number", shout_number, NULL);
+    ci18n_format(out, sizeof(out), "total", "n", "5", NULL);
+    ASSERT_STR_EQ(out, "Summe: <5>");
+
+    ci18n_free();
+}
+
 TEST(test_bidi_isolate)
 {
     char out[64];
@@ -3902,6 +4006,9 @@ int main(void)
     RUN_TEST(test_load_mo_both_byte_orders);
     RUN_TEST(test_load_mo_refuses_what_is_not_one);
 #endif
+    RUN_TEST(test_format_number_matches_cldr);
+    RUN_TEST(test_format_number_edges);
+    RUN_TEST(test_number_formatter_in_translations);
     RUN_TEST(test_bidi_isolate);
     RUN_TEST(test_format_truncation_is_a_prefix);
     RUN_TEST(test_bidi_isolation_in_format);

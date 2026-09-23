@@ -13,6 +13,19 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## Unreleased
+
+### Added
+
+- Numbers written the way each language writes them. `{n:number}` in a
+  translation, or `ci18n_format_number()` directly, turns `"1234567.5"` into
+  1,234,567.5, 1.234.567,5, 1 234 567,5 or 12,34,567.5. `{n:number,2}`
+  rounds or pads to two fraction digits, half to even. Separators, minus
+  sign, minimum grouping and Indian grouping come from CLDR 48 for all 71
+  languages with plural rules, in under 1 KB; `tools/cldr_numbers.py`
+  generates the table and the 803 cases the tests check it against. A
+  formatter registered as `number` replaces the built-in one.
+
 ## 2.13.0 - 2026-09-23
 
 ### Added

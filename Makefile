@@ -26,7 +26,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples bench bench-threads bench-gettext examples test-mo
+.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples cldr-numbers bench bench-threads bench-gettext examples test-mo
 
 all: example test
 
@@ -122,6 +122,11 @@ fuzz-corpus: tests/fuzz_load_buffer.c include/ci18n.h
 # needs a network; the table is committed, so nothing else does.
 cldr-samples:
 	$(PYTHON) tools/cldr_samples.py
+
+# Regenerate the number symbol table in the header, and the cases the unit
+# tests check it against. Fetches the pinned CLDR release, like the above.
+cldr-numbers:
+	$(PYTHON) tools/cldr_numbers.py
 
 # Benchmarks. Optimised whatever CFLAGS says, since timing a -O0 build tells
 # you nothing. Each prints a Markdown table; see bench/README.md.

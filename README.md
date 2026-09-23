@@ -40,6 +40,7 @@ afternoon.
 | Time zones | ICU, or your platform |
 | Date, time and calendar formatting | ICU, or `strftime`, through a formatter |
 | Currency formatting | ICU, through a formatter |
+| Percent, compact "1.2K" and native digits | ICU, through a formatter |
 | Transliteration | ICU |
 | Word and line breaking for languages written without spaces | ICU |
 | Case mapping beyond ASCII, such as Turkish dotless i | ICU |
@@ -62,12 +63,11 @@ countries change their minds about daylight saving. A library with one
 maintainer shipping stale timezone or currency data would be confidently
 wrong, which is worse than not offering it at all.
 
-### Not there yet
-
-Planned: per-locale number separators.
+### Arrived recently
 
 Text direction arrived in 2.7.0, UTF-8 helpers and pluggable formatters in
-2.9.0, ordinals in 2.10.0, and bidi isolation in 2.13.0. Each has a section of its own below.
+2.9.0, ordinals in 2.10.0, bidi isolation and `.mo` loading in 2.13.0, and
+per-language number separators in 2.14.0. Each has a section of its own below.
 
 ### Which one to pick
 
@@ -675,6 +675,48 @@ In the shared threading mode a formatter runs while the catalogue's read lock
 is held. So it must not call back into the library, and it has to be safe to
 run on several threads at once.
 
+### Numbers
+
+The same number is written four ways across four languages:
+
+| Language | `1234567.5` | `{n:number,2}` of `19.999` |
+| --- | --- | --- |
+| en | 1,234,567.5 | 20.00 |
+| de | 1.234.567,5 | 20,00 |
+| ru | 1 234 567,5 | 20,00 |
+| hi | 12,34,567.5 | 20.00 |
+
+`number` is a built-in formatter, so a translation just names it:
+
+```ini
+total=Total: {n:number}
+price=Price: {n:number,2} USD
+files[other]={count:number} files
+```
+
+```c
+ci18n_format(out, sizeof(out), "total", "n", "1234567.5", NULL);
+ci18n_format_number(out, sizeof(out), "de", "1234567.5", -1);  /* directly */
+```
+
+- **The value is a string**, such as `"-1234.5"`, so a double cannot round
+  it on the way. Print yours with `%ld` or `%.2f` first.
+- **The argument is the fraction digits.** None keeps what the value has;
+  `2` rounds or pads to two, half to even, as CLDR does.
+- **Per language, from CLDR**: the decimal and group separators, the minus
+  sign, whether 1234 is grouped at all (Spanish and Polish wait for 12 345),
+  and the Indian 12,34,567. All 71 languages with plural rules are covered,
+  in under 1 KB. [tools/cldr_numbers.py](tools/cldr_numbers.py) generates the
+  table and checks every language against CLDR.
+- **The current language decides.** An unknown one is written the English
+  way, as it gets English plurals.
+- **Anything else passes through.** `1e9` or `12,5` comes out as it went in,
+  and a formatter you register as `number` replaces the built-in one.
+
+Digits stay 0 to 9 everywhere: Arabic, Persian, Bengali and a few others
+have native digits of their own, and CLDR lists Latin ones for every
+language as well, which is what this writes.
+
 ### Locale detection
 
 ```c
@@ -865,6 +907,7 @@ printf("ci18n %s\n", CI18N_VERSION_STRING);
 | `ci18n_utf8_truncate(text, max)`         | Cut to fit, at a boundary |
 | `ci18n_set_formatter(name, fn, ud)`      | Register a value renderer |
 | `ci18n_remove_formatter(name)`           | Forget one |
+| `ci18n_format_number(out, cap, lang, num, digits)` | A number the language's way |
 | `ci18n_format_in(c, out, cap, key, ...)` | Fill placeholders, on that catalogue |
 | `ci18n_format_plural_in(c, ...)`         | Plural form, filled, on that catalogue |
 | `ci18n_format(out, cap, key, ...)`       | Fill named placeholders |
