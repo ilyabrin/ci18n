@@ -984,7 +984,7 @@ single-header библиотеки и существуют, и это вполн
 include(FetchContent)
 FetchContent_Declare(ci18n
   GIT_REPOSITORY https://github.com/ilyabrin/ci18n.git
-  GIT_TAG v2.13.0)
+  GIT_TAG v2.14.0)
 FetchContent_MakeAvailable(ci18n)
 
 target_link_libraries(your_target PRIVATE ci18n::ci18n)
