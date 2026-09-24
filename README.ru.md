@@ -77,7 +77,9 @@ C99, а компоновать ничего не нужно. Как подпро
 ни примеров и не добавляет правил установки. `make install DESTDIR=...`
 готовит сборку пакета, а `make uninstall` всё откатывает.
 
-Для Arduino и PlatformIO это обычная библиотека; см.
+С vcpkg добавьте [реестр ci18n](https://github.com/ilyabrin/vcpkg-registry)
+в свой `vcpkg-configuration.json`, и дальше `find_package(ci18n)` работает,
+как описано выше. Для Arduino и PlatformIO это обычная библиотека; см.
 [Arduino и AVR](docs/ru/embedded-and-size.md#arduino-и-avr).
 
 ## Что умеет

@@ -77,7 +77,9 @@ requires C99, and links nothing. As a subproject it builds no tests and no
 example, and adds no install rules. `make install DESTDIR=...` stages a
 package build, and `make uninstall` undoes it.
 
-For Arduino and PlatformIO it is a library like any other; see
+With vcpkg, add the [ci18n registry](https://github.com/ilyabrin/vcpkg-registry)
+to your `vcpkg-configuration.json`, and then `find_package(ci18n)` works as
+above. For Arduino and PlatformIO it is a library like any other; see
 [Arduino and AVR](docs/embedded-and-size.md#arduino-and-avr).
 
 ## What it does
