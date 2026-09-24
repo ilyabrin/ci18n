@@ -102,8 +102,8 @@ declarations. The header says so with an `#error` if you forget.
 
 **Reads scale with cores.** A catalogue holds 16 locks, each on its own
 cache line, and every thread reads through its own one, so readers never
-touch the same memory. With `make bench-threads`, one thread does 27 million
-`ci18n_get` calls a second and eight threads 162 million between them, the
+touch the same memory. With `make bench-threads`, one thread does 26 million
+`ci18n_get` calls a second and eight threads 146 million between them, the
 same as eight separate catalogues. The price is on the writing side: a
 writer takes all 16 locks, so `ci18n_set()` and the loaders cost a little
 more under this mode, which suits "load once, reload rarely".

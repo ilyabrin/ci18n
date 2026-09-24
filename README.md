@@ -95,7 +95,7 @@ For Arduino and PlatformIO it is a library like any other; see
 | **Small** | 28 KB of code at `-Os` with everything in, 15 KB with `CI18N_MINIMAL`, 7.6 KB on a Cortex-M4, and it runs on an Arduino Uno. [Embedded and size](docs/embedded-and-size.md) |
 | **Checked** | Warnings as errors, sanitizers and fuzzing, on Linux, macOS, Windows, the BSDs, iOS, Android, WebAssembly, bare-metal ARM and RISC-V, and 8-bit AVR. [Platforms](docs/platforms.md) |
 
-A lookup takes about 24 ns, and glibc's `gettext` about 133 ns on the same
+A lookup takes about 28 ns, and glibc's `gettext` about 140 ns on the same
 machine. [Performance](docs/performance.md)
 
 ## What it does not do
