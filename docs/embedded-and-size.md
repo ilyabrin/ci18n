@@ -135,10 +135,10 @@ languages, one of them right to left, built that way.
 
 The library is an Arduino library and a PlatformIO one. In the Arduino IDE,
 use Sketch > Include Library > Add .ZIP Library with a release archive from
-GitHub. In PlatformIO:
+GitHub. In PlatformIO, from its [registry](https://registry.platformio.org/libraries/ilyabrin/ci18n):
 
 ```ini
-lib_deps = https://github.com/ilyabrin/ci18n.git#v2.18.0
+lib_deps = ilyabrin/ci18n@^2.18.0
 ```
 
 Then include `ci18n.h` in the sketch and nothing else. The library compiles

@@ -138,10 +138,10 @@ ESP-IDF, Zephyr, STM32Cube и ядрах Arduino, линкер сам выбра
 
 Это библиотека для Arduino и для PlatformIO. В Arduino IDE выберите
 Sketch > Include Library > Add .ZIP Library и укажите архив релиза с GitHub.
-В PlatformIO:
+В PlatformIO, из [реестра](https://registry.platformio.org/libraries/ilyabrin/ci18n):
 
 ```ini
-lib_deps = https://github.com/ilyabrin/ci18n.git#v2.18.0
+lib_deps = ilyabrin/ci18n@^2.18.0
 ```
 
 Дальше подключите в скетче `ci18n.h`, и больше ничего. Реализацию библиотека
