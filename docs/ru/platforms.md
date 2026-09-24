@@ -17,13 +17,13 @@
 | WebAssembly | Emscripten | да, под Node |
 | Cortex-M0+, M3, M4, M7 | arm-none-eabi-gcc, newlib | да на M3, под QEMU |
 | RISC-V 32, класс ESP32-C3 | riscv gcc, picolibc | да, под QEMU |
+| AVR: ATmega2560, ATmega328P из Arduino Uno | avr-gcc, avr-libc; Arduino IDE, PlatformIO | да, под QEMU |
 
 Стандарт C это C99, и CI собирает ещё как C11 и C17. Каждый модуль, который
 можно выключить, собирается и тестируется отдельно и все вместе.
 
-Самая маленькая цель это 32-битный микроконтроллер с 64 КБ RAM. 8-битные
-платы AVR, такие как Arduino Uno, не поддерживаются; см.
-[Встраиваемые системы и размер](embedded-and-size.md#маленькие-устройства).
+Самая маленькая цель это Arduino Uno с 2 КБ RAM; см.
+[Arduino и AVR](embedded-and-size.md#arduino-и-avr).
 
 Задачи лежат в [.github/workflows/platforms.yml](../../.github/workflows/platforms.yml)
 и [.github/workflows/ci.yml](../../.github/workflows/ci.yml).

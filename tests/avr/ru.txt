@@ -1,0 +1,5 @@
+# Russian, compiled into flash by tests/avr/run.sh.
+greeting=Привет, {name}!
+files[one]={count} файл
+files[few]={count} файла
+files[many]={count} файлов

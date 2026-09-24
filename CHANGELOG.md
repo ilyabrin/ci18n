@@ -13,6 +13,39 @@ Check `CI18N_VERSION` at compile time if you need a specific version:
 #endif
 ```
 
+## Unreleased
+
+### Added
+
+- 8-bit AVR, down to the Arduino Uno with its 2 KB of RAM. CI runs the unit
+  tests on an ATmega2560 and compiled catalogues on an ATmega328P, both
+  under QEMU. On AVR the library's tables and every compiled catalogue stay
+  in flash, and the limits shrink by themselves through
+  `CI18N_SMALL_LIMITS`, so a catalogue takes 0.3 KB. Two languages with
+  plurals and formatting add 9.5 KB of flash and 0.7 KB of RAM to a sketch.
+- An Arduino and PlatformIO library: `library.properties`, `library.json`,
+  and [examples/arduino/Hello](examples/arduino/Hello/Hello.ino). The
+  implementation compiles itself there, so a sketch only includes the header.
+- `ci18n_plural_copy()` and `ci18n_ordinal_copy()`, with `_in` variants,
+  which copy a form into a buffer as `ci18n_get_copy()` does. They are how
+  translations are read on AVR, where the pointer-returning functions are a
+  compile error that names them, and they work everywhere.
+- `CI18N_SMALL_LIMITS`, the limits for a few kilobytes of RAM, for any small
+  target.
+
+### Changed
+
+- Entries index their strings with 16-bit offsets where `size_t` is 16 bits,
+  10 bytes an entry instead of 16.
+- The CLDR test tables are stored more compactly, so they fit where a single
+  object may not exceed 32 KB.
+
+### Fixed
+
+- A language's string storage could loop forever when it grew past half the
+  range of `size_t`, which a 16-bit target reaches at 32 KB. Growth now stops
+  with `CI18N_ERR_OUT_OF_MEMORY` instead.
+
 ## 2.17.0 - 2026-09-23
 
 ### Added

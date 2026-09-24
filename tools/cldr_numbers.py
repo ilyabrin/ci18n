@@ -168,13 +168,13 @@ def main():
 
     block = [BEGIN,
              '/* CLDR %s, the Latin-digit symbols of each language. */\n' % CLDR_VERSION,
-             'static const ci18n_number_shape_t ci18n_number_shapes[] = {\n']
+             'static const ci18n_number_shape_t ci18n_number_shapes[] CI18N_ROM = {\n']
     for d, g, m, mg, sec in shapes:
         block.append('    {%s, %s, %s, %d, %d},\n' % (c_string(d), c_string(g), c_string(m), mg, sec))
     block.append('};\n\n')
     block.append('/* Unknown languages take this one, as they take English plurals. */\n')
     block.append('#define CI18N_NUMBER_DEFAULT_SHAPE %d\n\n' % shapes.index(english))
-    block.append('static const ci18n_number_language_t ci18n_number_languages[] = {\n')
+    block.append('static const ci18n_number_language_t ci18n_number_languages[] CI18N_ROM = {\n')
     for i in range(0, len(rows), 6):
         chunk = rows[i:i + 6]
         block.append('    ' + ' '.join('{"%s", %d},' % r for r in chunk) + '\n')
@@ -197,16 +197,35 @@ def main():
            ' * SPDX-License-Identifier: MIT\n',
            ' */\n\n',
            '#define CI18N_CLDR_NUMBERS_VERSION "%s"\n\n' % CLDR_VERSION,
-           'typedef struct\n{\n    const char *language;\n    const char *number;\n'
-           '    int fraction_digits;\n    const char *expected;\n} cldr_number_case_t;\n\n',
-           'static const cldr_number_case_t CLDR_NUMBER_CASES[] = {\n']
-    for lang, index in rows:
-        for number, digits in CASES:
-            out.append('    {"%s", "%s", %d, %s},\n' % (
-                lang, number, digits, c_string(format_number(shapes[index], number, digits))))
+           '/* Where the expected results live. They are read through\n'
+           ' * CLDR_NUMBER_READ, so a target that keeps constants apart from RAM,\n'
+           ' * such as AVR, can put them in flash by defining both first. */\n'
+           '#ifndef CLDR_NUMBERS_STORAGE\n'
+           '#define CLDR_NUMBERS_STORAGE\n'
+           '#define CLDR_NUMBER_READ(dst, src) memcpy((dst), (src), sizeof(dst))\n'
+           '#endif\n\n',
+           '/* Every language formats the same inputs. */\n'
+           'typedef struct\n{\n    const char *number;\n    int fraction_digits;\n'
+           '} cldr_number_input_t;\n\n',
+           'static const cldr_number_input_t CLDR_NUMBER_INPUTS[] = {\n']
     for number, digits in CASES:
-        out.append('    {"xx", "%s", %d, %s},\n' % (
-            number, digits, c_string(format_number(english, number, digits))))
+        out.append('    {"%s", %d},\n' % (number, digits))
+    out.append('};\n\n')
+    # "xx" is a language CLDR does not have, which takes the default.
+    languages_out = [lang for lang, _ in rows] + ['xx']
+    expected = [[format_number(shapes[index], number, digits) for number, digits in CASES]
+                for _, index in rows]
+    expected.append([format_number(english, number, digits) for number, digits in CASES])
+    width = max(len(e.encode('utf-8')) for row in expected for e in row) + 1
+    out.append('static const char CLDR_NUMBER_LANGUAGES[][4] = {\n')
+    for i in range(0, len(languages_out), 10):
+        out.append('    ' + ' '.join('"%s",' % l for l in languages_out[i:i + 10]) + '\n')
+    out.append('};\n\n')
+    out.append('/* What CLDR says each language makes of each input. */\n')
+    out.append('static const char CLDR_NUMBER_EXPECTED[][%d][%d] CLDR_NUMBERS_STORAGE = {\n'
+               % (len(CASES), width))
+    for lang, row in zip(languages_out, expected):
+        out.append('    /* %s */ {%s},\n' % (lang, ', '.join(c_string(e) for e in row)))
     out.append('};\n')
     with open(SAMPLES, 'w', encoding='utf-8', newline='\n') as f:
         f.write(''.join(out))

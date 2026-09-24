@@ -23,6 +23,9 @@
 
 Последний столбец называет макрос, который выключает функцию, если такой
 есть; см. [Что можно выключить](embedded-and-size.md#что-можно-выключить).
+AVR там значит, что функция возвращает перевод указателем, а на AVR он может
+указывать во флеш, поэтому её вызов даёт ошибку компиляции; вместо неё есть
+функции `_copy`. См. [Arduino и AVR](embedded-and-size.md#arduino-и-avr).
 
 ## Инициализация
 
@@ -58,9 +61,9 @@
 
 | Функция | Что делает | Выключает |
 | --- | --- | --- |
-| `ci18n_get(key)` | Перевод или `NULL` | |
-| `ci18n_get_or_key(key)` | Перевод или сам ключ | |
-| `ci18n_get_copy(key, out, cap)` | Копирует его в ваш буфер; безопасный вариант для потоков | |
+| `ci18n_get(key)` | Перевод или `NULL` | AVR |
+| `ci18n_get_or_key(key)` | Перевод или сам ключ | AVR |
+| `ci18n_get_copy(key, out, cap)` | Копирует его в ваш буфер; безопасный вариант для потоков и вариант для AVR | |
 | `ci18n_has(key)` | Есть ли ключ в текущем или запасном языке | |
 | `ci18n_count(code)` | Число записей в языке | |
 | `ci18n_foreach(code, fn, user_data)` | Вызывает `fn` для каждой записи | |
@@ -78,12 +81,14 @@
 
 | Функция | Что делает | Выключает |
 | --- | --- | --- |
-| `ci18n_plural(key, n)` | Форма плюрала для `n` или `NULL` | |
-| `ci18n_plural_or_key(key, n)` | То же или ключ | |
+| `ci18n_plural(key, n)` | Форма плюрала для `n` или `NULL` | AVR |
+| `ci18n_plural_or_key(key, n)` | То же или ключ | AVR |
+| `ci18n_plural_copy(key, n, out, cap)` | Копирует форму плюрала в ваш буфер | |
 | `ci18n_plural_category(code, n)` | Категория CLDR для `n` | |
 | `ci18n_plural_category_name(cat)` | `"one"`, `"few"` и так далее | |
-| `ci18n_ordinal(key, n)` | Порядковая форма: 1st, 2nd, 3rd | `NO_ORDINALS` |
-| `ci18n_ordinal_or_key(key, n)` | То же или ключ | `NO_ORDINALS` |
+| `ci18n_ordinal(key, n)` | Порядковая форма: 1st, 2nd, 3rd | `NO_ORDINALS`, AVR |
+| `ci18n_ordinal_or_key(key, n)` | То же или ключ | `NO_ORDINALS`, AVR |
+| `ci18n_ordinal_copy(key, n, out, cap)` | Копирует порядковую форму в ваш буфер | `NO_ORDINALS` |
 | `ci18n_ordinal_category(code, n)` | Порядковая категория CLDR для `n` | `NO_ORDINALS` |
 
 ## Форматирование

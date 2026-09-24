@@ -16,13 +16,13 @@ these. "Build only" means there is nothing in CI to run the result on.
 | WebAssembly | Emscripten | yes, under Node |
 | Cortex-M0+, M3, M4, M7 | arm-none-eabi-gcc, newlib | yes on M3, under QEMU |
 | RISC-V 32, the ESP32-C3 class | riscv gcc, picolibc | yes, under QEMU |
+| AVR: ATmega2560, ATmega328P of the Arduino Uno | avr-gcc, avr-libc; Arduino IDE, PlatformIO | yes, under QEMU |
 
 The C standard is C99, and CI also builds as C11 and C17. Every module that
 can be left out is built and tested on its own and all together.
 
-The smallest target is a 32-bit microcontroller with 64 KB of RAM. 8-bit AVR
-boards such as the Arduino Uno are not supported; see
-[Embedded and size](embedded-and-size.md#small-devices).
+The smallest target is an Arduino Uno, with 2 KB of RAM; see
+[Arduino and AVR](embedded-and-size.md#arduino-and-avr).
 
 The jobs live in [.github/workflows/platforms.yml](../.github/workflows/platforms.yml)
 and [.github/workflows/ci.yml](../.github/workflows/ci.yml).

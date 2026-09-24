@@ -113,6 +113,57 @@ extern "C"
      * Configuration
      * ============================================================================ */
 
+/*
+ * Limits sized for a microcontroller with a few kilobytes of RAM. The
+ * defaults below cost about 2 KB in the context and a 4 KB line buffer
+ * during a load, which is all of an Arduino Uno's RAM and more. On by
+ * default for AVR; define it yourself for any other small target. Every
+ * limit can still be set on its own, and one you set wins.
+ *
+ *   key 64 bytes, value 256, 4 languages, 64 keys in each, codes of 15
+ *   characters, 4 formatters with 15 character names and 31 character
+ *   arguments
+ *
+ * 64 keys is about what a few kilobytes of heap holds. For more, compile the
+ * translations in (docs/compiled-catalogs.md): those take no RAM and have no
+ * key limit.
+ */
+#if defined(__AVR__) && !defined(CI18N_SMALL_LIMITS)
+#define CI18N_SMALL_LIMITS
+#endif
+
+/* avr-libc has no file system, so there is nothing for a loader to open. */
+#if defined(__AVR__) && !defined(CI18N_NO_FILES)
+#define CI18N_NO_FILES
+#endif
+
+#ifdef CI18N_SMALL_LIMITS
+#ifndef CI18N_MAX_KEY_LENGTH
+#define CI18N_MAX_KEY_LENGTH 64
+#endif
+#ifndef CI18N_MAX_VALUE_LENGTH
+#define CI18N_MAX_VALUE_LENGTH 256
+#endif
+#ifndef CI18N_MAX_LANGUAGES
+#define CI18N_MAX_LANGUAGES 4
+#endif
+#ifndef CI18N_MAX_KEYS_PER_LANGUAGE
+#define CI18N_MAX_KEYS_PER_LANGUAGE 64
+#endif
+#ifndef CI18N_MAX_CODE_LENGTH
+#define CI18N_MAX_CODE_LENGTH 16
+#endif
+#ifndef CI18N_MAX_FORMATTERS
+#define CI18N_MAX_FORMATTERS 4
+#endif
+#ifndef CI18N_MAX_FORMATTER_NAME
+#define CI18N_MAX_FORMATTER_NAME 16
+#endif
+#ifndef CI18N_MAX_FORMATTER_ARG
+#define CI18N_MAX_FORMATTER_ARG 32
+#endif
+#endif
+
 #ifndef CI18N_MAX_KEY_LENGTH
 #define CI18N_MAX_KEY_LENGTH 256
 #endif
@@ -180,6 +231,41 @@ extern "C"
 #ifndef CI18N_NO_FILES
 #define CI18N_NO_FILES
 #endif
+#endif
+
+/*
+ * AVR keeps program memory apart from RAM, and a plain const array is copied
+ * into RAM at startup. CI18N_ROM puts a table in flash instead. The library
+ * uses it for its own tables, and tools/ci18n_compile for the catalogues it
+ * generates. Empty everywhere else.
+ */
+#if defined(__AVR__)
+#include <avr/pgmspace.h>
+#define CI18N_ROM PROGMEM
+#else
+#define CI18N_ROM
+#endif
+
+/*
+ * Defined when compiled translations live in flash: on AVR, unless
+ * CI18N_NO_COMPILED. A string in flash is not one the program can read
+ * through a plain pointer, so the functions that return a translation as a
+ * pointer are unavailable, and calling one is a compile error that names
+ * the replacement. Copy translations out instead, with ci18n_get_copy(),
+ * ci18n_plural_copy(), ci18n_ordinal_copy() or ci18n_format().
+ */
+#if defined(__AVR__) && !defined(CI18N_NO_COMPILED)
+#define CI18N_FLASH_STRINGS
+#endif
+
+#ifdef CI18N_FLASH_STRINGS
+#define CI18N_RETURNS_TRANSLATION                                                  \
+    __attribute__((error("on AVR a translation can be in flash, where a pointer " \
+                         "to it cannot be read: copy it with ci18n_get_copy(), "  \
+                         "ci18n_plural_copy() or ci18n_ordinal_copy(), or "       \
+                         "define CI18N_NO_COMPILED")))
+#else
+#define CI18N_RETURNS_TRANSLATION
 #endif
 
 /* How many formatters one catalogue can hold. Applications register a handful
@@ -367,8 +453,25 @@ typedef union
      * the first insert.
      * ------------------------------------------------------------------------ */
 
+    /*
+     * An offset into an arena or an index into the entries. 16 bits where
+     * size_t is, as on AVR, since no arena can be larger there anyway, which
+     * makes an entry 10 bytes rather than 16.
+     */
+#if SIZE_MAX <= 0xFFFFu
+    typedef uint16_t ci18n_index_t;
+#define CI18N_INDEX_MAX UINT16_MAX
+#else
+    typedef uint32_t ci18n_index_t;
+#define CI18N_INDEX_MAX UINT32_MAX
+#endif
+
     /* Marks "no entry" in a bucket or a chain link. */
-#define CI18N_NO_INDEX UINT32_MAX
+#define CI18N_NO_INDEX CI18N_INDEX_MAX
+
+#if CI18N_MAX_KEYS_PER_LANGUAGE >= CI18N_INDEX_MAX
+#error "ci18n: CI18N_MAX_KEYS_PER_LANGUAGE does not fit this target's entry index"
+#endif
 
     /* Packed, NUL-terminated strings addressed by offset. */
     typedef struct ci18n_arena
@@ -380,10 +483,10 @@ typedef union
 
     typedef struct ci18n_entry
     {
-        uint32_t key;   /* offset into the language arena */
-        uint32_t value; /* offset into the language arena */
-        uint32_t hash;  /* cached hash of the key, to skip most strcmp calls */
-        uint32_t next;  /* next entry in this bucket's chain, or CI18N_NO_INDEX */
+        ci18n_index_t key;   /* offset into the language arena */
+        ci18n_index_t value; /* offset into the language arena */
+        uint32_t hash;       /* cached hash of the key, to skip most strcmp calls */
+        ci18n_index_t next;  /* next entry in this bucket's chain, or CI18N_NO_INDEX */
     } ci18n_entry_t;
 
     /*
@@ -412,7 +515,7 @@ typedef union
         char code[CI18N_MAX_CODE_LENGTH];
         ci18n_arena_t strings;
         ci18n_entry_t *entries; /* dense, in insertion order */
-        uint32_t *buckets;      /* hash bucket to entry index */
+        ci18n_index_t *buckets; /* hash bucket to entry index */
         size_t count;
         size_t capacity;
         size_t bucket_count; /* always a power of two, or zero */
@@ -707,7 +810,7 @@ typedef union
      *
      * Returns: translation string or NULL if not found
      */
-    CI18N_DEF const char *ci18n_get(const char *key);
+    CI18N_DEF const char *ci18n_get(const char *key) CI18N_RETURNS_TRANSLATION;
 
     /*
      * Get translation with fallback to the key itself if not found.
@@ -717,7 +820,7 @@ typedef union
      *
      * Returns: translation string or the key if not found
      */
-    CI18N_DEF const char *ci18n_get_or_key(const char *key);
+    CI18N_DEF const char *ci18n_get_or_key(const char *key) CI18N_RETURNS_TRANSLATION;
 
     /*
      * Copy a translation into a buffer you own.
@@ -919,14 +1022,24 @@ typedef union
      *
      * Returns: translation string or NULL if none of the three exist
      */
-    CI18N_DEF const char *ci18n_plural(const char *key, long count);
+    CI18N_DEF const char *ci18n_plural(const char *key, long count) CI18N_RETURNS_TRANSLATION;
 
     /*
      * Same, falling back to the key itself rather than NULL.
      *
      * Returns: translation string, or the key if nothing was found
      */
-    CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count);
+    CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count) CI18N_RETURNS_TRANSLATION;
+
+    /*
+     * Copy the plural form of a key for `count` into a buffer you own. The
+     * form is chosen as ci18n_plural() chooses it, and copied as
+     * ci18n_get_copy() copies: snprintf() rules, the full length returned.
+     *
+     * Returns: the length of the form, or 0 if none of the three keys exist
+     */
+    CI18N_DEF size_t ci18n_plural_copy(const char *key, long count, char *out,
+                                       size_t capacity);
 
 #if !defined(CI18N_NO_ORDINALS)
     /*
@@ -964,14 +1077,23 @@ typedef union
      *
      * Returns: translation string or NULL if none of the three exist
      */
-    CI18N_DEF const char *ci18n_ordinal(const char *key, long count);
+    CI18N_DEF const char *ci18n_ordinal(const char *key, long count) CI18N_RETURNS_TRANSLATION;
 
     /*
      * Same, falling back to the key itself rather than NULL.
      *
      * Returns: translation string, or the key if nothing was found
      */
-    CI18N_DEF const char *ci18n_ordinal_or_key(const char *key, long count);
+    CI18N_DEF const char *ci18n_ordinal_or_key(const char *key, long count) CI18N_RETURNS_TRANSLATION;
+
+    /*
+     * Copy the ordinal form of a key for `count` into a buffer you own, as
+     * ci18n_plural_copy() does for plurals.
+     *
+     * Returns: the length of the form, or 0 if none of the three keys exist
+     */
+    CI18N_DEF size_t ci18n_ordinal_copy(const char *key, long count, char *out,
+                                        size_t capacity);
 #endif
 
     /* ============================================================================
@@ -1511,16 +1633,18 @@ typedef union
     CI18N_DEF bool ci18n_remove_in(ci18n_t *catalog, const char *language_code, const char *key);
     CI18N_DEF bool ci18n_clear_in(ci18n_t *catalog, const char *language_code);
     CI18N_DEF bool ci18n_remove_language_in(ci18n_t *catalog, const char *language_code);
-    CI18N_DEF const char *ci18n_get_in(ci18n_t *catalog, const char *key);
-    CI18N_DEF const char *ci18n_get_or_key_in(ci18n_t *catalog, const char *key);
+    CI18N_DEF const char *ci18n_get_in(ci18n_t *catalog, const char *key) CI18N_RETURNS_TRANSLATION;
+    CI18N_DEF const char *ci18n_get_or_key_in(ci18n_t *catalog, const char *key) CI18N_RETURNS_TRANSLATION;
     CI18N_DEF bool ci18n_has_in(ci18n_t *catalog, const char *key);
     CI18N_DEF const char *ci18n_get_current_in(ci18n_t *catalog);
     CI18N_DEF size_t ci18n_get_languages_in(ci18n_t *catalog, const char **out, size_t capacity);
     CI18N_DEF size_t ci18n_count_in(ci18n_t *catalog, const char *language_code);
     CI18N_DEF size_t ci18n_foreach_in(ci18n_t *catalog, const char *language_code,
                                       ci18n_entry_fn fn, void *user_data);
-    CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long count);
-    CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count);
+    CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long count) CI18N_RETURNS_TRANSLATION;
+    CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count) CI18N_RETURNS_TRANSLATION;
+    CI18N_DEF size_t ci18n_plural_copy_in(ci18n_t *catalog, const char *key, long count,
+                                          char *out, size_t capacity);
     CI18N_DEF ci18n_direction_t ci18n_current_direction_in(ci18n_t *catalog);
 #if !defined(CI18N_NO_FORMAT)
     CI18N_DEF bool ci18n_set_bidi_isolation_in(ci18n_t *catalog, bool enabled);
@@ -1533,8 +1657,10 @@ typedef union
                                             const char *key, long count, ...);
 #endif
 #if !defined(CI18N_NO_ORDINALS)
-    CI18N_DEF const char *ci18n_ordinal_in(ci18n_t *catalog, const char *key, long count);
-    CI18N_DEF const char *ci18n_ordinal_or_key_in(ci18n_t *catalog, const char *key, long count);
+    CI18N_DEF const char *ci18n_ordinal_in(ci18n_t *catalog, const char *key, long count) CI18N_RETURNS_TRANSLATION;
+    CI18N_DEF const char *ci18n_ordinal_or_key_in(ci18n_t *catalog, const char *key, long count) CI18N_RETURNS_TRANSLATION;
+    CI18N_DEF size_t ci18n_ordinal_copy_in(ci18n_t *catalog, const char *key, long count,
+                                           char *out, size_t capacity);
 #endif
 #if !defined(CI18N_NO_FORMAT) && !defined(CI18N_NO_ORDINALS)
     CI18N_DEF size_t ci18n_format_ordinal_in(ci18n_t *catalog, char *out, size_t capacity,
@@ -1658,6 +1784,39 @@ typedef union
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+
+/*
+ * Where the library's own tables live: plural and ordinal rules, number
+ * symbols. On AVR, program memory and RAM are separate address spaces, and a
+ * plain const array is copied into RAM at startup, so the tables go to flash
+ * and a row is copied out with CI18N_ROM_READ before use, which copies as
+ * many bytes as the source row holds. Everywhere else the row stays where it
+ * is and the copy is a plain memcpy.
+ */
+#if defined(__AVR__)
+#define CI18N_ROM_READ(dst, src) memcpy_P((dst), (src), sizeof(*(src)))
+#define CI18N_ROM_U16(p) pgm_read_word(p)
+#define CI18N_ROM_U32(p) pgm_read_dword(p)
+#define CI18N_ROM_CHAR(p) ((char)pgm_read_byte(p))
+#define CI18N_ROM_STRNCMP(ram, rom, n) strncmp_P((ram), (rom), (n))
+#else
+#define CI18N_ROM_READ(dst, src) memcpy((dst), (src), sizeof(*(src)))
+#define CI18N_ROM_U16(p) (*(p))
+#define CI18N_ROM_U32(p) (*(p))
+#define CI18N_ROM_CHAR(p) (*(p))
+#define CI18N_ROM_STRNCMP(ram, rom, n) strncmp((ram), (rom), (n))
+#endif
+
+#if defined(CI18N_FLASH_STRINGS) && defined(CI18N_THREAD_SHARED)
+#error "ci18n: CI18N_THREAD_SHARED needs translations in RAM; define CI18N_NO_COMPILED"
+#endif
+
+#ifdef CI18N_FLASH_STRINGS
+/* A compiled value copied out of flash, valid until the next lookup. Only
+ * the library itself reads it: the public functions that would hand this
+ * pointer out are compile errors here, and the rest copy it on at once. */
+static char ci18n_flash_value[CI18N_MAX_VALUE_LENGTH];
+#endif
 
 /* Needed for GetUserDefaultLocaleName(). The shared threading mode needs
  * windows.h too, and pulls it in earlier, next to the lock it declares. */
@@ -1849,6 +2008,12 @@ static bool ci18n_arena_reserve(ci18n_t *ctx, ci18n_arena_t *arena, size_t need)
         return true;
     }
 
+    /* Every offset has to fit in ci18n_index_t, and the sum must not wrap. */
+    if (need > CI18N_INDEX_MAX || arena->used > CI18N_INDEX_MAX - need)
+    {
+        return ci18n_fail(ctx, CI18N_ERR_OUT_OF_MEMORY);
+    }
+
     if (capacity == 0)
     {
         capacity = 256;
@@ -1856,7 +2021,8 @@ static bool ci18n_arena_reserve(ci18n_t *ctx, ci18n_arena_t *arena, size_t need)
 
     while (capacity < arena->used + need)
     {
-        capacity *= 2;
+        /* Doubling could wrap, so the last step takes exactly what is needed. */
+        capacity = (capacity > SIZE_MAX / 2) ? arena->used + need : capacity * 2;
     }
 
     data = (char *)realloc(arena->data, capacity);
@@ -1878,21 +2044,21 @@ static bool ci18n_arena_reserve(ci18n_t *ctx, ci18n_arena_t *arena, size_t need)
  * to be corrected.
  */
 static bool ci18n_arena_add(ci18n_t *ctx, ci18n_arena_t *arena, const char *text, size_t len,
-                            uint32_t *out_offset)
+                            ci18n_index_t *out_offset)
 {
     if (!ci18n_arena_reserve(ctx, arena, len + 1))
     {
         return false;
     }
 
-    *out_offset = (uint32_t)arena->used;
+    *out_offset = (ci18n_index_t)arena->used;
     memcpy(arena->data + arena->used, text, len);
     arena->data[arena->used + len] = '\0';
     arena->used += len + 1;
     return true;
 }
 
-static const char *ci18n_arena_at(const ci18n_arena_t *arena, uint32_t offset)
+static const char *ci18n_arena_at(const ci18n_arena_t *arena, ci18n_index_t offset)
 {
     return arena->data + offset;
 }
@@ -2011,7 +2177,7 @@ static size_t ci18n_unescaped_length(const char *text, size_t len)
  * needing a second copy of itself.
  */
 static bool ci18n_arena_add_unescaped(ci18n_t *ctx, ci18n_arena_t *arena, const char *text, size_t len,
-                                      uint32_t *out_offset)
+                                      ci18n_index_t *out_offset)
 {
     size_t decoded_len = ci18n_unescaped_length(text, len);
     size_t i = 0;
@@ -2022,7 +2188,7 @@ static bool ci18n_arena_add_unescaped(ci18n_t *ctx, ci18n_arena_t *arena, const 
         return false;
     }
 
-    *out_offset = (uint32_t)arena->used;
+    *out_offset = (ci18n_index_t)arena->used;
     out = arena->used;
 
     while (i < len)
@@ -2061,7 +2227,7 @@ static void ci18n_rebuild_buckets(ci18n_language_t *lang)
         size_t bucket = lang->entries[i].hash & mask;
 
         lang->entries[i].next = lang->buckets[bucket];
-        lang->buckets[bucket] = (uint32_t)i;
+        lang->buckets[bucket] = (ci18n_index_t)i;
     }
 }
 
@@ -2074,7 +2240,7 @@ static void ci18n_rebuild_buckets(ci18n_language_t *lang)
 static bool ci18n_ensure_buckets(ci18n_t *ctx, ci18n_language_t *lang, size_t wanted)
 {
     size_t bucket_count = lang->bucket_count;
-    uint32_t *buckets;
+    ci18n_index_t *buckets;
 
     if (bucket_count > 0 && wanted * 4 <= bucket_count * 3)
     {
@@ -2091,7 +2257,7 @@ static bool ci18n_ensure_buckets(ci18n_t *ctx, ci18n_language_t *lang, size_t wa
         bucket_count *= 2;
     }
 
-    buckets = (uint32_t *)realloc(lang->buckets, sizeof(uint32_t) * bucket_count);
+    buckets = (ci18n_index_t *)realloc(lang->buckets, sizeof(ci18n_index_t) * bucket_count);
     if (!buckets)
     {
         return ci18n_fail(ctx, CI18N_ERR_OUT_OF_MEMORY);
@@ -2167,8 +2333,8 @@ static const char *ci18n_compiled_find(const ci18n_compiled_t *c, const char *ke
                                        size_t key_len)
 {
     uint32_t hash = ci18n_hash(key, key_len);
-    uint32_t seed = c->seeds[hash & c->seed_mask];
-    uint32_t slot = c->slots[ci18n_compiled_mix(hash, seed) & c->slot_mask];
+    uint32_t seed = CI18N_ROM_U16(&c->seeds[hash & c->seed_mask]);
+    uint32_t slot = CI18N_ROM_U32(&c->slots[ci18n_compiled_mix(hash, seed) & c->slot_mask]);
     uint32_t index = slot & 0xFFFFu;
     const char *stored;
 
@@ -2180,23 +2346,23 @@ static const char *ci18n_compiled_find(const ci18n_compiled_t *c, const char *ke
      * empty slot fails the first test, since no hash is 0xFFFF on top and
      * missing at the bottom. */
     if ((slot >> 16) != (hash >> 16) || index == 0xFFFFu ||
-        c->entries[3u * index + 2u] != hash)
+        CI18N_ROM_U32(&c->entries[3u * index + 2u]) != hash)
     {
         return NULL;
     }
-    stored = c->strings + c->entries[3u * index];
-    if (strncmp(stored, key, key_len) != 0 || stored[key_len] != '\0')
+    stored = c->strings + CI18N_ROM_U32(&c->entries[3u * index]);
+    if (CI18N_ROM_STRNCMP(key, stored, key_len) != 0 || CI18N_ROM_CHAR(stored + key_len) != '\0')
     {
         return NULL;
     }
-    return c->strings + c->entries[3u * index + 1u];
+    return c->strings + CI18N_ROM_U32(&c->entries[3u * index + 1u]);
 }
 #endif
 
 static int ci18n_find_entry_n(ci18n_language_t *lang, const char *key, size_t key_len,
                               uint32_t hash)
 {
-    uint32_t index;
+    ci18n_index_t index;
 
     if (lang->bucket_count == 0)
     {
@@ -2246,8 +2412,8 @@ static bool ci18n_lang_set_ex(ci18n_t *ctx, ci18n_language_t *lang,
                               bool unescape)
 {
     uint32_t hash;
-    uint32_t key_offset;
-    uint32_t value_offset;
+    ci18n_index_t key_offset;
+    ci18n_index_t value_offset;
     ci18n_entry_t *entry;
     size_t bucket;
     int existing;
@@ -2260,7 +2426,7 @@ static bool ci18n_lang_set_ex(ci18n_t *ctx, ci18n_language_t *lang,
     if (unescape_key && memchr(key, '\\', key_len) != NULL)
     {
         size_t decoded_len = ci18n_unescaped_length(key, key_len);
-        uint32_t offset;
+        ci18n_index_t offset;
 
         if (decoded_len > sizeof(decoded_key) - 1)
         {
@@ -2300,7 +2466,7 @@ static bool ci18n_lang_set_ex(ci18n_t *ctx, ci18n_language_t *lang,
 
             if (unescape)
             {
-                uint32_t offset;
+                ci18n_index_t offset;
 
                 /* Decode into the existing slot by decoding to the arena tail
                  * and moving it back, which keeps one implementation of the
@@ -2381,7 +2547,7 @@ static bool ci18n_lang_set_ex(ci18n_t *ctx, ci18n_language_t *lang,
     entry->value = value_offset;
     entry->hash = hash;
     entry->next = lang->buckets[bucket];
-    lang->buckets[bucket] = (uint32_t)lang->count;
+    lang->buckets[bucket] = (ci18n_index_t)lang->count;
     lang->count++;
 
     return true;
@@ -2415,7 +2581,18 @@ static const char *ci18n_lang_value(ci18n_language_t *lang, const char *key)
 #ifndef CI18N_NO_COMPILED
     if (lang->compiled)
     {
+#ifdef CI18N_FLASH_STRINGS
+        const char *value = ci18n_compiled_find(lang->compiled, key, strlen(key));
+
+        if (!value)
+        {
+            return NULL;
+        }
+        strlcpy_P(ci18n_flash_value, value, sizeof(ci18n_flash_value));
+        return ci18n_flash_value;
+#else
         return ci18n_compiled_find(lang->compiled, key, strlen(key));
+#endif
     }
 #endif
 
@@ -3636,6 +3813,21 @@ static bool ci18n_has_impl(ci18n_t *ctx, const char *key)
 
     return found;
 }
+/* snprintf() rules for a translation found, or not, by one of the lookups. */
+static size_t ci18n_copy_found(const char *text, char *out, size_t capacity)
+{
+    size_t len = text ? strlen(text) : 0;
+
+    if (out && capacity > 0)
+    {
+        size_t fits = len < capacity - 1 ? len : capacity - 1;
+
+        memcpy(out, text ? text : "", fits);
+        out[fits] = 0;
+    }
+    return len;
+}
+
 CI18N_DEF size_t ci18n_get_copy(const char *key, char *out, size_t capacity)
 {
     const char *text;
@@ -4079,8 +4271,17 @@ static size_t ci18n_foreach_impl(ci18n_t *ctx, const char *language_code,
 
         for (i = 0; i < c->count; i++)
         {
+#ifdef CI18N_FLASH_STRINGS
+            char key[CI18N_MAX_KEY_LENGTH];
+
+            strlcpy_P(key, c->strings + CI18N_ROM_U32(&c->entries[3u * i]), sizeof(key));
+            strlcpy_P(ci18n_flash_value, c->strings + CI18N_ROM_U32(&c->entries[3u * i + 1u]),
+                      sizeof(ci18n_flash_value));
+            if (!fn(key, ci18n_flash_value, user_data))
+#else
             if (!fn(c->strings + c->entries[3u * i], c->strings + c->entries[3u * i + 1u],
                     user_data))
+#endif
             {
                 return i + 1;
             }
@@ -5200,7 +5401,7 @@ typedef enum ci18n_plural_family
 
 typedef struct ci18n_plural_rule
 {
-    const char *language;
+    char language[4];
     ci18n_plural_family_t family;
 } ci18n_plural_rule_t;
 
@@ -5209,7 +5410,7 @@ typedef struct ci18n_plural_rule
  * is to cover what people actually translate into, and to fall back to the
  * English rule rather than pretend.
  */
-static const ci18n_plural_rule_t ci18n_plural_rules[] = {
+static const ci18n_plural_rule_t ci18n_plural_rules[] CI18N_ROM = {
     /* No plural distinction. */
     {"ja", CI18N_PF_OTHER_ONLY}, {"zh", CI18N_PF_OTHER_ONLY},
     {"ko", CI18N_PF_OTHER_ONLY}, {"vi", CI18N_PF_OTHER_ONLY},
@@ -5386,6 +5587,7 @@ static ci18n_plural_family_t ci18n_plural_family(const char *language_code)
     size_t len;
     size_t i;
     char first, second;
+    ci18n_plural_rule_t row;
 
     if (!language_code)
     {
@@ -5396,9 +5598,10 @@ static ci18n_plural_family_t ci18n_plural_family(const char *language_code)
     {
         for (i = 0; i < sizeof(ci18n_plural_rules) / sizeof(ci18n_plural_rules[0]); i++)
         {
-            if (ci18n_tag_is_pair(ci18n_plural_rules[i].language, first, second))
+            CI18N_ROM_READ(&row, &ci18n_plural_rules[i]);
+            if (ci18n_tag_is_pair(row.language, first, second))
             {
-                return ci18n_plural_rules[i].family;
+                return row.family;
             }
         }
         return CI18N_PF_ONE_OTHER;
@@ -5408,11 +5611,10 @@ static ci18n_plural_family_t ci18n_plural_family(const char *language_code)
 
     for (i = 0; i < sizeof(ci18n_plural_rules) / sizeof(ci18n_plural_rules[0]); i++)
     {
-        const char *candidate = ci18n_plural_rules[i].language;
-
-        if (ci18n_subtag_eq(candidate, language_code, len))
+        CI18N_ROM_READ(&row, &ci18n_plural_rules[i]);
+        if (ci18n_subtag_eq(row.language, language_code, len))
         {
-            return ci18n_plural_rules[i].family;
+            return row.family;
         }
     }
 
@@ -5631,11 +5833,11 @@ typedef enum ci18n_ordinal_family
 
 typedef struct ci18n_ordinal_rule
 {
-    const char *language;
+    char language[4];
     ci18n_ordinal_family_t family;
 } ci18n_ordinal_rule_t;
 
-static const ci18n_ordinal_rule_t ci18n_ordinal_rules[] = {
+static const ci18n_ordinal_rule_t ci18n_ordinal_rules[] CI18N_ROM = {
     {"fr", CI18N_OF_FIRST}, {"ga", CI18N_OF_FIRST}, {"hy", CI18N_OF_FIRST},
     {"lo", CI18N_OF_FIRST}, {"ms", CI18N_OF_FIRST}, {"ro", CI18N_OF_FIRST},
     {"vi", CI18N_OF_FIRST},
@@ -5662,6 +5864,7 @@ static ci18n_ordinal_family_t ci18n_ordinal_family(const char *language_code)
     size_t len;
     size_t i;
     char first, second;
+    ci18n_ordinal_rule_t row;
 
     if (!language_code)
     {
@@ -5672,9 +5875,10 @@ static ci18n_ordinal_family_t ci18n_ordinal_family(const char *language_code)
     {
         for (i = 0; i < sizeof(ci18n_ordinal_rules) / sizeof(ci18n_ordinal_rules[0]); i++)
         {
-            if (ci18n_tag_is_pair(ci18n_ordinal_rules[i].language, first, second))
+            CI18N_ROM_READ(&row, &ci18n_ordinal_rules[i]);
+            if (ci18n_tag_is_pair(row.language, first, second))
             {
-                return ci18n_ordinal_rules[i].family;
+                return row.family;
             }
         }
         return CI18N_OF_OTHER_ONLY;
@@ -5684,9 +5888,10 @@ static ci18n_ordinal_family_t ci18n_ordinal_family(const char *language_code)
 
     for (i = 0; i < sizeof(ci18n_ordinal_rules) / sizeof(ci18n_ordinal_rules[0]); i++)
     {
-        if (ci18n_subtag_eq(ci18n_ordinal_rules[i].language, language_code, len))
+        CI18N_ROM_READ(&row, &ci18n_ordinal_rules[i]);
+        if (ci18n_subtag_eq(row.language, language_code, len))
         {
-            return ci18n_ordinal_rules[i].family;
+            return row.family;
         }
     }
 
@@ -5914,7 +6119,7 @@ CI18N_DEF const char *ci18n_plural_category_name(ci18n_plural_category_t categor
  * a few dozen more) are also right to left, but a translation file in them is
  * not a case worth carrying a table for.
  */
-static const char *const ci18n_rtl_scripts[] = {
+static const char ci18n_rtl_scripts[][5] CI18N_ROM = {
     "Arab", /* Arabic */
     "Hebr", /* Hebrew */
     "Syrc", /* Syriac */
@@ -5936,7 +6141,7 @@ static const char *const ci18n_rtl_scripts[] = {
  * story for "az" and "pa", which are left to right until a script subtag says
  * "az-Arab" or "pa-Arab".
  */
-static const char *const ci18n_rtl_languages[] = {
+static const char ci18n_rtl_languages[][4] CI18N_ROM = {
     /* Arabic script. */
     "ar",  /* Arabic */
     "fa",  /* Persian */
@@ -5969,6 +6174,7 @@ static const char *const ci18n_rtl_languages[] = {
 
 CI18N_DEF ci18n_direction_t ci18n_direction(const char *language_code)
 {
+    char row[5]; /* a script, or a language in its first four bytes */
     const char *script;
     size_t script_len = 0;
     size_t len;
@@ -5986,7 +6192,8 @@ CI18N_DEF ci18n_direction_t ci18n_direction(const char *language_code)
     {
         for (i = 0; i < sizeof(ci18n_rtl_scripts) / sizeof(ci18n_rtl_scripts[0]); i++)
         {
-            if (ci18n_subtag_eq(ci18n_rtl_scripts[i], script, script_len))
+            CI18N_ROM_READ(row, &ci18n_rtl_scripts[i]);
+            if (ci18n_subtag_eq(row, script, script_len))
             {
                 return CI18N_DIR_RTL;
             }
@@ -5999,7 +6206,8 @@ CI18N_DEF ci18n_direction_t ci18n_direction(const char *language_code)
 
     for (i = 0; i < sizeof(ci18n_rtl_languages) / sizeof(ci18n_rtl_languages[0]); i++)
     {
-        if (ci18n_subtag_eq(ci18n_rtl_languages[i], language_code, len))
+        CI18N_ROM_READ(row, &ci18n_rtl_languages[i]);
+        if (ci18n_subtag_eq(row, language_code, len))
         {
             return CI18N_DIR_RTL;
         }
@@ -6104,9 +6312,9 @@ CI18N_DEF const char *ci18n_bidi_mark(ci18n_direction_t direction)
 #if !defined(CI18N_NO_NUMBERS)
 typedef struct ci18n_number_shape
 {
-    const char *decimal;
-    const char *group;
-    const char *minus;
+    char decimal[8];
+    char group[8];
+    char minus[8];
     unsigned char min_grouping; /* digits past the first group before any grouping */
     unsigned char secondary;    /* size of groups after the first: 3, or 2 in India */
 } ci18n_number_shape_t;
@@ -6119,7 +6327,7 @@ typedef struct ci18n_number_language
 
 /* BEGIN generated by tools/cldr_numbers.py, do not edit */
 /* CLDR 48.0.0, the Latin-digit symbols of each language. */
-static const ci18n_number_shape_t ci18n_number_shapes[] = {
+static const ci18n_number_shape_t ci18n_number_shapes[] CI18N_ROM = {
     {",", "\302\240", "-", 1, 3},
     {".", ",", "\342\200\216-", 1, 3},
     {",", ".", "-", 1, 3},
@@ -6138,7 +6346,7 @@ static const ci18n_number_shape_t ci18n_number_shapes[] = {
 /* Unknown languages take this one, as they take English plurals. */
 #define CI18N_NUMBER_DEFAULT_SHAPE 5
 
-static const ci18n_number_language_t ci18n_number_languages[] = {
+static const ci18n_number_language_t ci18n_number_languages[] CI18N_ROM = {
     {"af", 0}, {"ar", 1}, {"az", 2}, {"be", 3}, {"bg", 3}, {"bn", 4},
     {"bs", 2}, {"ca", 2}, {"cs", 0}, {"da", 2}, {"de", 2}, {"el", 2},
     {"en", 5}, {"es", 6}, {"et", 7}, {"eu", 8}, {"fa", 9}, {"fi", 10},
@@ -6154,8 +6362,11 @@ static const ci18n_number_language_t ci18n_number_languages[] = {
 };
 /* END generated by tools/cldr_numbers.py */
 
-static const ci18n_number_shape_t *ci18n_number_shape(const char *language_code)
+/* Copies the language's symbols into *out and returns out. */
+static const ci18n_number_shape_t *ci18n_number_shape(const char *language_code,
+                                                      ci18n_number_shape_t *out)
 {
+    ci18n_number_language_t row;
     size_t len;
     size_t i;
 
@@ -6164,13 +6375,16 @@ static const ci18n_number_shape_t *ci18n_number_shape(const char *language_code)
         len = ci18n_primary_subtag_len(language_code);
         for (i = 0; i < sizeof(ci18n_number_languages) / sizeof(ci18n_number_languages[0]); i++)
         {
-            if (ci18n_subtag_eq(ci18n_number_languages[i].code, language_code, len))
+            CI18N_ROM_READ(&row, &ci18n_number_languages[i]);
+            if (ci18n_subtag_eq(row.code, language_code, len))
             {
-                return &ci18n_number_shapes[ci18n_number_languages[i].shape];
+                CI18N_ROM_READ(out, &ci18n_number_shapes[row.shape]);
+                return out;
             }
         }
     }
-    return &ci18n_number_shapes[CI18N_NUMBER_DEFAULT_SHAPE];
+    CI18N_ROM_READ(out, &ci18n_number_shapes[CI18N_NUMBER_DEFAULT_SHAPE]);
+    return out;
 }
 
 /* Longest number, in digits, the formatter takes apart; anything longer is
@@ -6181,7 +6395,8 @@ CI18N_DEF size_t ci18n_format_number(char *out, size_t capacity,
                                      const char *language_code,
                                      const char *number, int fraction_digits)
 {
-    const ci18n_number_shape_t *shape = ci18n_number_shape(language_code);
+    ci18n_number_shape_t shape_row;
+    const ci18n_number_shape_t *shape = ci18n_number_shape(language_code, &shape_row);
     char digits[CI18N_NUMBER_MAX_DIGITS + 24];
     const char *p = number;
     const char *int_start;
@@ -6545,6 +6760,17 @@ static const char *ci18n_ordinal_or_key_impl(ci18n_t *ctx, const char *key, long
     return result ? result : key;
 }
 #endif
+CI18N_DEF size_t ci18n_plural_copy(const char *key, long count, char *out, size_t capacity)
+{
+    size_t len;
+
+    CI18N_READ_LOCK(&ci18n_ctx);
+    len = ci18n_copy_found(ci18n_plural_impl(&ci18n_ctx, key, count), out, capacity);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
+
+    return len;
+}
+
 CI18N_DEF const char *ci18n_plural_or_key(const char *key, long count)
 {
     const char *result;
@@ -7022,6 +7248,18 @@ CI18N_DEF const char *ci18n_plural_in(ci18n_t *catalog, const char *key, long co
     return result;
 }
 
+CI18N_DEF size_t ci18n_plural_copy_in(ci18n_t *catalog, const char *key, long count,
+                                     char *out, size_t capacity)
+{
+    size_t len;
+
+    CI18N_READ_LOCK(catalog);
+    len = ci18n_copy_found(ci18n_plural_impl(catalog, key, count), out, capacity);
+    CI18N_READ_UNLOCK(catalog);
+
+    return len;
+}
+
 CI18N_DEF const char *ci18n_plural_or_key_in(ci18n_t *catalog, const char *key, long count)
 {
     const char *result;
@@ -7050,6 +7288,18 @@ CI18N_DEF const char *ci18n_ordinal_in(ci18n_t *catalog, const char *key, long c
     return result;
 }
 
+CI18N_DEF size_t ci18n_ordinal_copy_in(ci18n_t *catalog, const char *key, long count,
+                                      char *out, size_t capacity)
+{
+    size_t len;
+
+    CI18N_READ_LOCK(catalog);
+    len = ci18n_copy_found(ci18n_ordinal_impl(catalog, key, count), out, capacity);
+    CI18N_READ_UNLOCK(catalog);
+
+    return len;
+}
+
 CI18N_DEF const char *ci18n_ordinal_or_key_in(ci18n_t *catalog, const char *key, long count)
 {
     const char *result;
@@ -7069,6 +7319,17 @@ CI18N_DEF const char *ci18n_ordinal_or_key_in(ci18n_t *catalog, const char *key,
 CI18N_DEF const char *ci18n_ordinal(const char *key, long count)
 {
     return ci18n_ordinal_in(&ci18n_ctx, key, count);
+}
+
+CI18N_DEF size_t ci18n_ordinal_copy(const char *key, long count, char *out, size_t capacity)
+{
+    size_t len;
+
+    CI18N_READ_LOCK(&ci18n_ctx);
+    len = ci18n_copy_found(ci18n_ordinal_impl(&ci18n_ctx, key, count), out, capacity);
+    CI18N_READ_UNLOCK(&ci18n_ctx);
+
+    return len;
 }
 
 CI18N_DEF const char *ci18n_ordinal_or_key(const char *key, long count)
@@ -7141,41 +7402,44 @@ CI18N_DEF ci18n_error_t ci18n_last_error(void)
     return CI18N_ERROR_SLOT(&ci18n_ctx);
 }
 
+/*
+ * The messages in error-code order, one after another. One array rather
+ * than a literal per case: the linker drops an array nobody uses, but not
+ * a literal, and on AVR every byte of those would sit in RAM.
+ */
+static const char ci18n_error_text[] =
+    "no error" "\0"
+    "ci18n_init() has not been called" "\0"
+    "invalid argument" "\0"
+    "language code is too long" "\0"
+    "translation file could not be opened" "\0"
+    "out of memory" "\0"
+    "too many languages" "\0"
+    "too many keys in this language" "\0"
+    "no such language is loaded" "\0"
+    "no such key" "\0"
+    "the load dropped or truncated something" "\0"
+    "too many formatters" "\0"
+    "a translation asked for a formatter that is not registered" "\0"
+    "the language is compiled in and cannot be changed" "\0";
+
 CI18N_DEF const char *ci18n_error_string(ci18n_error_t error)
 {
-    switch (error)
+    const char *text = ci18n_error_text;
+    int i;
+
+    /* Unsigned, so a negative value is out of range too, whatever type the
+     * compiler gives the enum. */
+    if ((unsigned)error > (unsigned)CI18N_ERR_LAST)
     {
-    case CI18N_OK:
-        return "no error";
-    case CI18N_ERR_NOT_INITIALIZED:
-        return "ci18n_init() has not been called";
-    case CI18N_ERR_INVALID_ARGUMENT:
-        return "invalid argument";
-    case CI18N_ERR_CODE_TOO_LONG:
-        return "language code is too long";
-    case CI18N_ERR_FILE_NOT_FOUND:
-        return "translation file could not be opened";
-    case CI18N_ERR_OUT_OF_MEMORY:
-        return "out of memory";
-    case CI18N_ERR_TOO_MANY_LANGUAGES:
-        return "too many languages";
-    case CI18N_ERR_TOO_MANY_KEYS:
-        return "too many keys in this language";
-    case CI18N_ERR_LANGUAGE_NOT_FOUND:
-        return "no such language is loaded";
-    case CI18N_ERR_KEY_NOT_FOUND:
-        return "no such key";
-    case CI18N_ERR_PARSE:
-        return "the load dropped or truncated something";
-    case CI18N_ERR_TOO_MANY_FORMATTERS:
-        return "too many formatters";
-    case CI18N_ERR_UNKNOWN_FORMATTER:
-        return "a translation asked for a formatter that is not registered";
-    case CI18N_ERR_READ_ONLY:
-        return "the language is compiled in and cannot be changed";
+        return "unknown error";
     }
 
-    return "unknown error";
+    for (i = 0; i < (int)error; i++)
+    {
+        text += strlen(text) + 1;
+    }
+    return text;
 }
 
 CI18N_DEF const ci18n_load_stats_t *ci18n_last_load_stats(void)

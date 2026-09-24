@@ -21,7 +21,10 @@ always terminate, and return the length the whole result would have had.
 - [Errors](#errors)
 
 The last column names the macro that leaves a function out, if any; see
-[Leaving parts out](embedded-and-size.md#leaving-parts-out).
+[Leaving parts out](embedded-and-size.md#leaving-parts-out). AVR there means
+the function returns a translation as a pointer, which on AVR can point into
+flash, so calling it is a compile error; the `_copy` functions replace it.
+See [Arduino and AVR](embedded-and-size.md#arduino-and-avr).
 
 ## Setup
 
@@ -57,9 +60,9 @@ The last column names the macro that leaves a function out, if any; see
 
 | Function | Does | Left out by |
 | --- | --- | --- |
-| `ci18n_get(key)` | The translation, or `NULL` | |
-| `ci18n_get_or_key(key)` | The translation, or the key itself | |
-| `ci18n_get_copy(key, out, cap)` | Copy it into your buffer; the safe one with threads | |
+| `ci18n_get(key)` | The translation, or `NULL` | AVR |
+| `ci18n_get_or_key(key)` | The translation, or the key itself | AVR |
+| `ci18n_get_copy(key, out, cap)` | Copy it into your buffer; the safe one with threads, and the one for AVR | |
 | `ci18n_has(key)` | Whether the current or fallback language has it | |
 | `ci18n_count(code)` | Entries in a language | |
 | `ci18n_foreach(code, fn, user_data)` | Call `fn` for every entry | |
@@ -77,12 +80,14 @@ The last column names the macro that leaves a function out, if any; see
 
 | Function | Does | Left out by |
 | --- | --- | --- |
-| `ci18n_plural(key, n)` | The plural form for `n`, or `NULL` | |
-| `ci18n_plural_or_key(key, n)` | The same, or the key | |
+| `ci18n_plural(key, n)` | The plural form for `n`, or `NULL` | AVR |
+| `ci18n_plural_or_key(key, n)` | The same, or the key | AVR |
+| `ci18n_plural_copy(key, n, out, cap)` | Copy the plural form into your buffer | |
 | `ci18n_plural_category(code, n)` | The CLDR category of `n` | |
 | `ci18n_plural_category_name(cat)` | `"one"`, `"few"` and so on | |
-| `ci18n_ordinal(key, n)` | The ordinal form: 1st, 2nd, 3rd | `NO_ORDINALS` |
-| `ci18n_ordinal_or_key(key, n)` | The same, or the key | `NO_ORDINALS` |
+| `ci18n_ordinal(key, n)` | The ordinal form: 1st, 2nd, 3rd | `NO_ORDINALS`, AVR |
+| `ci18n_ordinal_or_key(key, n)` | The same, or the key | `NO_ORDINALS`, AVR |
+| `ci18n_ordinal_copy(key, n, out, cap)` | Copy the ordinal form into your buffer | `NO_ORDINALS` |
 | `ci18n_ordinal_category(code, n)` | The CLDR ordinal category of `n` | `NO_ORDINALS` |
 
 ## Formatting

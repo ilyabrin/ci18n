@@ -1,0 +1,5 @@
+# English. Regenerate en.h after editing, see Hello.ino.
+title=ci18n on an Arduino
+greeting=Hello, {name}!
+files[one]={count} file
+files[other]={count} files

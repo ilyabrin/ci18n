@@ -24,6 +24,7 @@ Every target, and what it needs beyond a C compiler:
 | `make test-po` | `.po` converter round trip | python3 |
 | `make test-mo` | `.mo` loader against the converter, both byte orders | python3, `msgfmt` |
 | `make test-compiled` | Compiled catalogues against the same files loaded, both threading modes, and the build errors they promise | pthreads |
+| `make test-avr` | The tests on 8-bit AVR under QEMU, catalogues in flash on an Arduino Uno, and the build error `ci18n_get()` has to give there | avr-gcc, avr-libc, `qemu-system-avr` |
 | `make fuzz-run` | Fuzz the parsers, see below | clang with libFuzzer |
 | `make fuzz-corpus` | Replay the fuzz seeds | |
 | `make bench`, `bench-threads`, `bench-gettext` | Timings, see [bench/README.md](bench/README.md) | pthreads; glibc for gettext |

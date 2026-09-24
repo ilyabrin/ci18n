@@ -26,7 +26,7 @@ CPPFLAGS += -I./include
 
 ALL_CFLAGS = $(CFLAGS) $(EXTRA_CFLAGS) $(CPPFLAGS)
 
-.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples cldr-numbers bench bench-threads bench-gettext examples test-mo test-compiled
+.PHONY: all clean example test test-threads test-shared test-po valgrind fuzz fuzz-run fuzz-replay fuzz-corpus cldr-samples cldr-numbers bench bench-threads bench-gettext examples test-mo test-compiled test-avr
 
 all: example test
 
@@ -157,7 +157,7 @@ COMPILED_DIR = build/compiled
 COMPILE = ./ci18n_compile
 
 test-compiled: tools/ci18n_compile.c tests/test_compiled.c tests/compiled/stress.txt \
-		include/ci18n.h
+		tests/avr/compiled.c include/ci18n.h
 	mkdir -p $(COMPILED_DIR)
 	$(CC) $(ALL_CFLAGS) -o ci18n_compile tools/ci18n_compile.c
 	$(COMPILE) -o $(COMPILED_DIR)/stress.h stress tests/compiled/stress.txt
@@ -170,9 +170,19 @@ test-compiled: tools/ci18n_compile.c tests/test_compiled.c tests/compiled/stress
 	$(CC) $(ALL_CFLAGS) -I$(COMPILED_DIR) -D_POSIX_C_SOURCE=200809L -DCI18N_THREAD_SHARED \
 		-pthread -o test_compiled_shared tests/test_compiled.c
 	./test_compiled_shared
+	$(COMPILE) -o $(COMPILED_DIR)/en.h en tests/avr/en.txt
+	$(COMPILE) -o $(COMPILED_DIR)/ru.h ru tests/avr/ru.txt
+	$(CC) $(ALL_CFLAGS) -I$(COMPILED_DIR) -o test_compiled_copy tests/avr/compiled.c
+	./test_compiled_copy
 	! $(CC) $(ALL_CFLAGS) -I$(COMPILED_DIR) -c -o typo.o tests/compiled/typo.c 2>/dev/null
 	! $(COMPILE) -o $(COMPILED_DIR)/broken.h broken examples/cli_sync/locales/de.txt 2>/dev/null
 	@echo "test-compiled: the mistyped key and the broken file were both refused"
+
+# The tests on 8-bit AVR under QEMU: the unit tests on an ATmega2560, and
+# catalogues kept in flash on it and on an Arduino Uno. Needs avr-gcc,
+# avr-libc and qemu-system-avr.
+test-avr: include/ci18n.h
+	HOSTCC="$(CC)" sh tests/avr/run.sh
 
 # The three examples in examples/*/, each run and compared with the output it
 # is known to give, so a change that alters what they print cannot slip by.
@@ -248,5 +258,6 @@ clean:
 		example_server example_server.exe example_server.out \
 		example_ui example_ui.exe example_ui.out \
 		ci18n_compile ci18n_compile.exe test_compiled test_compiled.exe \
-		test_compiled_shared test_compiled_shared.exe typo.o
+		test_compiled_shared test_compiled_shared.exe \
+		test_compiled_copy test_compiled_copy.exe typo.o
 	$(RM) -r build/compiled

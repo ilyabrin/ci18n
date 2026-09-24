@@ -296,6 +296,8 @@ int main(int argc, char **argv)
     unsigned char *strings;
     uint32_t *offsets;
     size_t used = 0;
+    size_t longest_key = 0;
+    size_t longest_value = 0;
     size_t i;
     FILE *out = stdout;
     bool keys_only = false;
@@ -404,6 +406,9 @@ int main(int argc, char **argv)
         size_t k = strlen(e.keys[i]) + 1;
         size_t v = strlen(e.values[i]) + 1;
 
+        longest_key = k > longest_key ? k : longest_key;
+        longest_value = v > longest_value ? v : longest_value;
+
         offsets[3 * i] = (uint32_t)used;
         memcpy(strings + used, e.keys[i], k);
         used += k;
@@ -445,25 +450,34 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    fprintf(out, "static const char ci18n_%s_strings[] = {", name);
+    /* Where strings stay in flash, each one read is copied into a buffer of
+     * the target's CI18N_MAX_* size first, so a longer one is a build error
+     * there rather than a translation cut short. */
+    fprintf(out, "#ifdef CI18N_FLASH_STRINGS\n"
+                 "typedef char ci18n_%s_longest_key_fits[%lu <= CI18N_MAX_KEY_LENGTH ? 1 : -1];\n"
+                 "typedef char ci18n_%s_longest_value_fits[%lu <= CI18N_MAX_VALUE_LENGTH ? 1 : -1];\n"
+                 "#endif\n\n",
+            name, (unsigned long)longest_key, name, (unsigned long)longest_value);
+
+    fprintf(out, "static const char ci18n_%s_strings[] CI18N_ROM = {", name);
     emit_bytes(out, strings, used);
     fprintf(out, "\n    0\n};\n\n");
 
-    fprintf(out, "static const uint32_t ci18n_%s_entries[] = {", name);
+    fprintf(out, "static const uint32_t ci18n_%s_entries[] CI18N_ROM = {", name);
     for (i = 0; i < 3 * n; i++)
     {
         fprintf(out, "%s%luu,", (i % 6 == 0) ? "\n    " : " ", (unsigned long)offsets[i]);
     }
     fprintf(out, "\n    0\n};\n\n");
 
-    fprintf(out, "static const uint32_t ci18n_%s_slots[] = {", name);
+    fprintf(out, "static const uint32_t ci18n_%s_slots[] CI18N_ROM = {", name);
     for (i = 0; i < slot_count; i++)
     {
         fprintf(out, "%s%luu,", (i % 6 == 0) ? "\n    " : " ", (unsigned long)slots[i]);
     }
     fprintf(out, "\n};\n\n");
 
-    fprintf(out, "static const uint16_t ci18n_%s_seeds[] = {", name);
+    fprintf(out, "static const uint16_t ci18n_%s_seeds[] CI18N_ROM = {", name);
     for (i = 0; i < seed_count; i++)
     {
         fprintf(out, "%s%u,", (i % 12 == 0) ? "\n    " : " ", seeds[i]);

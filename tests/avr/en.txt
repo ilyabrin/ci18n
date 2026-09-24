@@ -1,0 +1,10 @@
+# English, compiled into flash by tests/avr/run.sh.
+greeting=Hello, {name}!
+files[one]={count} file
+files[other]={count} files
+place[one]={count}st
+place[two]={count}nd
+place[few]={count}rd
+place[other]={count}th
+only_in_english=Fallback works
+escaped=Line one\nLine two

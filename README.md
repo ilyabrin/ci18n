@@ -77,6 +77,9 @@ requires C99, and links nothing. As a subproject it builds no tests and no
 example, and adds no install rules. `make install DESTDIR=...` stages a
 package build, and `make uninstall` undoes it.
 
+For Arduino and PlatformIO it is a library like any other; see
+[Arduino and AVR](docs/embedded-and-size.md#arduino-and-avr).
+
 ## What it does
 
 | | |
@@ -89,8 +92,8 @@ package build, and `make uninstall` undoes it.
 | **gettext** | Load `.mo` files directly, or convert `.po` files once. [Coming from gettext](docs/from-gettext.md) |
 | **Libraries and threads** | Independent catalogues, a thread-local mode, and a shared mode whose reads scale with cores. [Catalogues and threads](docs/catalogs-and-threads.md) |
 | **Compiled in** | Translations as constant data: no heap, no loading, and `CI18N_KEY(greeting)` makes a mistyped key a compile error. [Compiled catalogues](docs/compiled-catalogs.md) |
-| **Small** | 28 KB of code at `-Os` with everything in, 15 KB with `CI18N_MINIMAL`, 7.6 KB on a Cortex-M4. [Embedded and size](docs/embedded-and-size.md) |
-| **Checked** | Warnings as errors, sanitizers and fuzzing, on Linux, macOS, Windows, the BSDs, iOS, Android, WebAssembly and bare-metal ARM and RISC-V. [Platforms](docs/platforms.md) |
+| **Small** | 28 KB of code at `-Os` with everything in, 15 KB with `CI18N_MINIMAL`, 7.6 KB on a Cortex-M4, and it runs on an Arduino Uno. [Embedded and size](docs/embedded-and-size.md) |
+| **Checked** | Warnings as errors, sanitizers and fuzzing, on Linux, macOS, Windows, the BSDs, iOS, Android, WebAssembly, bare-metal ARM and RISC-V, and 8-bit AVR. [Platforms](docs/platforms.md) |
 
 A lookup takes about 24 ns, and glibc's `gettext` about 133 ns on the same
 machine. [Performance](docs/performance.md)

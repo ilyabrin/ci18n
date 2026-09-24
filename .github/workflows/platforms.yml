@@ -286,6 +286,63 @@ jobs:
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # 8-bit AVR, where int and size_t are 16 bits and constants have to be put
+  # in flash on purpose. The tests run under QEMU; the Arduino and
+  # PlatformIO steps check the library the way their users get it.
+  avr:
+    name: AVR (ATmega2560, Arduino Uno)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-avr avr-libc qemu-system-misc
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
+            | BINDIR=/usr/local/bin sh
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-lint/main/etc/install.sh \
+            | BINDIR=/usr/local/bin sh
+          arduino-cli core update-index
+          arduino-cli core install arduino:avr
+          pip install platformio
+
+      - name: Tests under QEMU
+        run: make test-avr
+
+      # The packaging files carry the version too, and a release that forgets
+      # them would reach Arduino users with the old number.
+      - name: Versions agree
+        run: |
+          v=$(awk '/define CI18N_VERSION_(MAJOR|MINOR|PATCH)/ {printf "%s%s", sep, $3; sep="."}' include/ci18n.h)
+          grep -qx "version=$v" library.properties
+          grep -q "\"version\": \"$v\"" library.json
+          echo "ci18n.h, library.properties and library.json all say $v"
+
+      - name: The example's catalogues match its translations
+        run: |
+          cc -std=c99 -Iinclude -o host_compile tools/ci18n_compile.c
+          cd examples/arduino/Hello
+          for l in en ru; do ../../../host_compile -o $l.h $l $l.txt; done
+          git diff --exit-code .
+
+      # Arduino compiles the sketch as C++, and the library from src/.
+      - name: Arduino
+        run: |
+          mkdir -p "$RUNNER_TEMP/libraries"
+          cp -r "$PWD" "$RUNNER_TEMP/libraries/ci18n"
+          rm -rf "$RUNNER_TEMP/libraries/ci18n/.git"
+          arduino-lint --compliance strict --library-manager submit --project-type library \
+            "$RUNNER_TEMP/libraries/ci18n"
+          for board in uno mega nano; do
+            arduino-cli compile --fqbn arduino:avr:$board --warnings all \
+              --libraries "$RUNNER_TEMP/libraries" examples/arduino/Hello | tee size_$board.txt
+          done
+
+      - name: PlatformIO
+        run: pio ci examples/arduino/Hello --lib . --board uno --board esp32dev
+
   android:
     name: Android NDK (compile only)
     runs-on: ubuntu-latest

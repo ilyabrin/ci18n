@@ -113,13 +113,10 @@ With `static`, expect `-Wunused-function` for any API you do not call.
 
 ## Small devices
 
-The smallest target is a 32-bit microcontroller with 64 KB of RAM. CI runs the
-unit tests bare metal on a Cortex-M3 with newlib and on RV32, the ESP32-C3
-class, with picolibc; see [Platforms](platforms.md).
-
-8-bit AVR boards such as the Arduino Uno are not supported: the library keeps
-strings on the heap and needs `fopen` for its file loaders, and an Uno has
-2 KB of RAM.
+The smallest target is an Arduino Uno: 8 bits, 2 KB of RAM, 32 KB of flash.
+CI runs the unit tests on an ATmega2560 and on the Uno's ATmega328P under
+QEMU, bare metal on a Cortex-M3 with newlib, and on RV32, the ESP32-C3 class,
+with picolibc; see [Platforms](platforms.md).
 
 What a device build usually wants:
 
@@ -133,3 +130,62 @@ What a device build usually wants:
 
 [examples/embedded_ui](../examples/embedded_ui/) is a 20x4 display in three
 languages, one of them right to left, built that way.
+
+### Arduino and AVR
+
+The library is an Arduino library and a PlatformIO one. In the Arduino IDE,
+use Sketch > Include Library > Add .ZIP Library with a release archive from
+GitHub. In PlatformIO:
+
+```ini
+lib_deps = https://github.com/ilyabrin/ci18n.git#v2.18.0
+```
+
+Then include `ci18n.h` in the sketch and nothing else. The library compiles
+its own implementation, so do not define `CI18N_IMPLEMENTATION` there.
+[examples/arduino/Hello](../examples/arduino/Hello/Hello.ino) prints two
+languages with plurals to the serial monitor.
+
+Three things are different on AVR, and all three happen by themselves:
+
+- **Small limits.** `CI18N_SMALL_LIMITS` is on: keys of 64 bytes, values of
+  256, 4 languages of 64 keys each, which makes a catalogue 0.3 KB. Any
+  limit you define yourself still wins, and the macro works on any other
+  small target too.
+- **Tables in flash.** avr-gcc copies every constant into RAM at startup
+  unless told otherwise. The library's own tables, the plural rules and
+  number symbols, and every compiled catalogue go to flash.
+- **Translations are copied out.** A string in flash cannot be read through a
+  plain pointer, so the functions that return one, `ci18n_get()`,
+  `ci18n_plural()`, `ci18n_ordinal()` and their relatives, are a compile
+  error that names the replacement. Read translations with the functions
+  that fill a buffer:
+
+```c
+char line[48];
+
+ci18n_get_copy("title", line, sizeof(line));
+ci18n_plural_copy("files", count, line, sizeof(line));
+ci18n_format_plural(line, sizeof(line), "files", count, NULL);
+```
+
+Those work on every platform, so code written this way ports anywhere.
+Defining `CI18N_NO_COMPILED` brings the pointer functions back, and leaves
+only languages loaded at run time, which live in RAM.
+
+Compile the catalogues on your computer, as for any target; see
+[Compiled catalogues](compiled-catalogs.md). A value is copied into a
+buffer of `CI18N_MAX_VALUE_LENGTH` bytes, so a catalogue with a longer one
+is a build error on AVR rather than a translation cut short. That buffer is
+also most of the RAM the library takes: lower the limit to shrink it.
+
+What it costs on an Uno:
+
+| Build | Flash | RAM |
+| --- | --- | --- |
+| The Hello example: 2 languages, plurals, formatting | 9.5 KB | 0.7 KB |
+| `CI18N_MINIMAL`, 2 compiled languages, a lookup and a plural | 6.4 KB | 0.6 KB |
+
+The figures are what the library and its catalogues add to an empty sketch.
+Constant data has to sit in the first 64 KB of flash, which avr-gcc arranges
+by itself on every board short of a very full Mega.

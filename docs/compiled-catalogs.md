@@ -140,6 +140,7 @@ language that was loaded replaces it.
 - **You would rather not have a build step.** Loading a text file needs
   nothing but the header, and remains the simplest way to start.
 
-8-bit AVR boards are still not supported. Their flash is read through special
-instructions, so a compiled catalogue there would need its own lookup path;
-see [Embedded and size](embedded-and-size.md#small-devices).
+On AVR, such as an Arduino Uno, a compiled catalogue stays in flash, where
+the program cannot read it through a plain pointer, so translations are read
+with the functions that copy them into a buffer; see
+[Arduino and AVR](embedded-and-size.md#arduino-and-avr).

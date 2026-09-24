@@ -31,8 +31,20 @@ static int test_failed;
 
 #define TEST(name) static void name(void)
 
+/*
+ * Where the whole suite does not fit in RAM, as on an 8-bit microcontroller,
+ * it runs in shards: build with TEST_SHARDS=N and TEST_SHARD=0..N-1, and each
+ * build runs every Nth test. A test that is not picked is never called, so
+ * the compiler drops it along with its strings.
+ */
+#ifdef TEST_SHARDS
+#define TEST_PICKED() (__COUNTER__ % TEST_SHARDS == TEST_SHARD)
+#else
+#define TEST_PICKED() 1
+#endif
+
 #define RUN_TEST(name)                   \
-    do                                   \
+    if (TEST_PICKED())                   \
     {                                    \
         tests_run++;                     \
         test_failed = 0;                 \
@@ -47,7 +59,7 @@ static int test_failed;
             tests_passed++;              \
             printf("PASSED\n");          \
         }                                \
-    } while (0)
+    }
 
 /* Reports the failure and leaves the test body. Every assertion prints the
  * trailing newline the "Running ..." line is still missing. */
@@ -1019,6 +1031,10 @@ TEST(test_long_language_code_is_rejected)
  * arena, and updating a value that no longer fits where the old one sat.
  * ============================================================================ */
 
+/* Fewer under CI18N_SMALL_LIMITS, where a language holds 64 keys. */
+#define MANY_KEYS (CI18N_MAX_KEYS_PER_LANGUAGE < 500 ? CI18N_MAX_KEYS_PER_LANGUAGE : 500)
+#define SOME_KEYS (CI18N_MAX_KEYS_PER_LANGUAGE < 100 ? CI18N_MAX_KEYS_PER_LANGUAGE : 100)
+
 TEST(test_many_keys_all_reachable)
 {
     char key[32];
@@ -1028,19 +1044,19 @@ TEST(test_many_keys_all_reachable)
     ci18n_init();
 
     /* Enough entries to force several bucket growths and real chains. */
-    for (i = 0; i < 500; i++)
+    for (i = 0; i < MANY_KEYS; i++)
     {
         snprintf(key, sizeof(key), "key_%d", i);
         snprintf(value, sizeof(value), "value_%d", i);
         ASSERT(ci18n_set("en", key, value) == true);
     }
 
-    ASSERT(ci18n_count("en") == 500);
+    ASSERT(ci18n_count("en") == MANY_KEYS);
     ci18n_set_current("en");
 
     /* Every one of them, not just the last: a rehash that dropped an entry
      * would leave the count right and the lookup wrong. */
-    for (i = 0; i < 500; i++)
+    for (i = 0; i < MANY_KEYS; i++)
     {
         snprintf(key, sizeof(key), "key_%d", i);
         snprintf(value, sizeof(value), "value_%d", i);
@@ -1048,7 +1064,8 @@ TEST(test_many_keys_all_reachable)
     }
 
     /* Keys that were never added must still miss. */
-    ASSERT(ci18n_get("key_500") == NULL);
+    snprintf(key, sizeof(key), "key_%d", MANY_KEYS);
+    ASSERT(ci18n_get(key) == NULL);
     ASSERT(ci18n_get("key_") == NULL);
     ASSERT(ci18n_get("") == NULL);
 
@@ -1062,7 +1079,7 @@ TEST(test_remove_keeps_the_rest_reachable)
 
     ci18n_init();
 
-    for (i = 0; i < 100; i++)
+    for (i = 0; i < SOME_KEYS; i++)
     {
         snprintf(key, sizeof(key), "key_%d", i);
         ci18n_set("en", key, "v");
@@ -1072,15 +1089,15 @@ TEST(test_remove_keeps_the_rest_reachable)
 
     /* Remove every other key. Removal moves the last entry into the hole, so
      * the bucket chains have to be rebuilt around it each time. */
-    for (i = 0; i < 100; i += 2)
+    for (i = 0; i < SOME_KEYS; i += 2)
     {
         snprintf(key, sizeof(key), "key_%d", i);
         ASSERT(ci18n_remove("en", key) == true);
     }
 
-    ASSERT(ci18n_count("en") == 50);
+    ASSERT(ci18n_count("en") == SOME_KEYS / 2);
 
-    for (i = 0; i < 100; i++)
+    for (i = 0; i < SOME_KEYS; i++)
     {
         snprintf(key, sizeof(key), "key_%d", i);
 
@@ -1096,7 +1113,7 @@ TEST(test_remove_keeps_the_rest_reachable)
 
     /* Removing the same key twice is a miss, not a corruption. */
     ASSERT(ci18n_remove("en", "key_0") == false);
-    ASSERT(ci18n_count("en") == 50);
+    ASSERT(ci18n_count("en") == SOME_KEYS / 2);
 
     /* And the table still accepts new entries afterwards. */
     ASSERT(ci18n_set("en", "added_after", "v") == true);
@@ -2335,12 +2352,16 @@ TEST(test_rules_match_cldr_samples)
 
     for (i = 0; i < sizeof(cldr_samples) / sizeof(cldr_samples[0]); i++)
     {
-        const cldr_sample_t *row = &cldr_samples[i];
-        ci18n_plural_category_t got = (row->kind == CLDR_ORDINAL)
-                                          ? ci18n_ordinal_category(row->language, row->count)
-                                          : ci18n_plural_category(row->language, row->count);
+        cldr_sample_t row;
+        const char *language;
+        ci18n_plural_category_t got;
 
-        if (got != row->category)
+        CLDR_SAMPLE_READ(&row, &cldr_samples[i]);
+        language = cldr_languages[row.language];
+        got = (row.kind == CLDR_ORDINAL) ? ci18n_ordinal_category(language, row.count)
+                                         : ci18n_plural_category(language, row.count);
+
+        if (got != (ci18n_plural_category_t)row.category)
         {
             if (mismatches == 0)
             {
@@ -2349,10 +2370,10 @@ TEST(test_rules_match_cldr_samples)
             if (mismatches < 10)
             {
                 printf("  %s %s %ld: got %s, CLDR %s says %s\n",
-                       row->kind == CLDR_ORDINAL ? "ordinal" : "cardinal",
-                       row->language, row->count, ci18n_plural_category_name(got),
+                       row.kind == CLDR_ORDINAL ? "ordinal" : "cardinal",
+                       language, row.count, ci18n_plural_category_name(got),
                        CI18N_CLDR_SAMPLES_VERSION,
-                       ci18n_plural_category_name(row->category));
+                       ci18n_plural_category_name((ci18n_plural_category_t)row.category));
             }
             mismatches++;
         }
@@ -2658,21 +2679,27 @@ TEST(test_load_mo_refuses_what_is_not_one)
 /* Every language, against what tools/cldr_numbers.py derived from CLDR. */
 TEST(test_format_number_matches_cldr)
 {
-    size_t i;
+    size_t l, i;
     int wrong = 0;
 
-    for (i = 0; i < sizeof(CLDR_NUMBER_CASES) / sizeof(CLDR_NUMBER_CASES[0]); i++)
+    for (l = 0; l < sizeof(CLDR_NUMBER_LANGUAGES) / sizeof(CLDR_NUMBER_LANGUAGES[0]); l++)
     {
-        const cldr_number_case_t *c = &CLDR_NUMBER_CASES[i];
-        char out[64];
-        size_t len = ci18n_format_number(out, sizeof(out), c->language, c->number,
-                                         c->fraction_digits);
-
-        if (strcmp(out, c->expected) != 0 || len != strlen(c->expected))
+        for (i = 0; i < sizeof(CLDR_NUMBER_INPUTS) / sizeof(CLDR_NUMBER_INPUTS[0]); i++)
         {
-            printf("  %s %s,%d: got [%s], CLDR says [%s]\n", c->language, c->number,
-                   c->fraction_digits, out, c->expected);
-            wrong++;
+            const cldr_number_input_t *c = &CLDR_NUMBER_INPUTS[i];
+            char expected[sizeof(CLDR_NUMBER_EXPECTED[0][0])];
+            char out[64];
+            size_t len;
+
+            CLDR_NUMBER_READ(expected, CLDR_NUMBER_EXPECTED[l][i]);
+            len = ci18n_format_number(out, sizeof(out), CLDR_NUMBER_LANGUAGES[l], c->number,
+                                      c->fraction_digits);
+            if (strcmp(out, expected) != 0 || len != strlen(expected))
+            {
+                printf("  %s %s,%d: got [%s], CLDR says [%s]\n", CLDR_NUMBER_LANGUAGES[l],
+                       c->number, c->fraction_digits, out, expected);
+                wrong++;
+            }
         }
     }
     ASSERT(wrong == 0);

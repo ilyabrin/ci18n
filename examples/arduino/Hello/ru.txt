@@ -1,0 +1,6 @@
+# Russian. Regenerate ru.h after editing, see Hello.ino.
+title=ci18n на Arduino
+greeting=Привет, {name}!
+files[one]={count} файл
+files[few]={count} файла
+files[many]={count} файлов

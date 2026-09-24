@@ -126,20 +126,37 @@ def main():
         '',
         '#define CI18N_CLDR_SAMPLES_VERSION "%s"' % version,
         '',
+        '/* Where the table lives. The rows are read through CLDR_SAMPLE_READ, so',
+        ' * a target that keeps constants apart from RAM, such as AVR, can put',
+        ' * the table in flash by defining both before including this file. */',
+        '#ifndef CLDR_SAMPLES_STORAGE',
+        '#define CLDR_SAMPLES_STORAGE',
+        '#define CLDR_SAMPLE_READ(dst, src) memcpy((dst), (src), sizeof(*(dst)))',
+        '#endif',
+        '',
         'typedef enum { CLDR_CARDINAL, CLDR_ORDINAL } cldr_kind_t;',
         '',
+        'static const char cldr_languages[][4] = {',
+    ]
+    for i in range(0, len(langs), 10):
+        lines.append('    ' + ' '.join('"%s",' % l for l in langs[i:i + 10]))
+    lines += [
+        '};',
+        '',
+        '/* Seven bytes a row, so the table stays under the 32 KB a single object',
+        ' * may take where size_t is 16 bits. */',
         'typedef struct',
         '{',
-        '    const char *language;',
         '    long count;',
-        '    cldr_kind_t kind;',
-        '    ci18n_plural_category_t category;',
+        '    unsigned char language; /* index into cldr_languages */',
+        '    unsigned char kind;     /* cldr_kind_t */',
+        '    unsigned char category; /* ci18n_plural_category_t */',
         '} cldr_sample_t;',
         '',
-        'static const cldr_sample_t cldr_samples[] = {',
+        'static const cldr_sample_t cldr_samples[] CLDR_SAMPLES_STORAGE = {',
     ]
     for lang, n, kind, cat in samples:
-        lines.append('    {"%s", %d, CLDR_%s, CI18N_PLURAL_%s},' % (lang, n, kind, cat.upper()))
+        lines.append('    {%d, %d, CLDR_%s, CI18N_PLURAL_%s},' % (n, langs.index(lang), kind, cat.upper()))
     lines.append('};')
     lines.append('')
 
