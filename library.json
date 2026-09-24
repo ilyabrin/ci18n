@@ -1,6 +1,6 @@
 {
   "name": "ci18n",
-  "version": "2.17.0",
+  "version": "2.18.0",
   "description": "Translations for C in one header: plurals for 71 languages, formatting, right-to-left text. Translations can be compiled into flash, where they take no RAM.",
   "keywords": ["i18n", "l10n", "translation", "plural", "localization", "utf-8"],
   "repository": {
