@@ -393,7 +393,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: emscripten-core/setup-emsdk@v16
 
       # NODERAWFS gives the program the real file system, which the file
       # tests and the examples need.
